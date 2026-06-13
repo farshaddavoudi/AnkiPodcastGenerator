@@ -43,6 +43,15 @@ ScaffoldingReadMe.txt
 ~$*
 *~
 CodeCoverage/
+.vs/
+.vscode/
+*.user
+*.suo
+*.mp3
+output*/
+voice-diagnostics/
+AnkiPodcasts/
+*.log
 
 # MSBuild Binary and Structured Log
 *.binlog
