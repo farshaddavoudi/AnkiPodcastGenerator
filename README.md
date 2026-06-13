@@ -2,7 +2,7 @@
 
 Turn due Anki cards into daily podcast MP3s.
 
-This project is a local Windows-first MVP for people who want to review Anki material while walking, commuting, doing chores, or preparing for focused study. It reads due cards through AnkiConnect, asks an LLM to turn them into a two-host educational conversation, generates multi-speaker TTS audio, and writes a tidy daily podcast folder.
+This project is a local Windows-first for people who want to review Anki material while walking, commuting, doing chores, or preparing for focused study. It reads due cards through AnkiConnect, asks an LLM to turn them into a two-host educational conversation, generates multi-speaker TTS audio, and writes a tidy daily podcast folder.
 
 ## Why This Exists
 
@@ -62,13 +62,13 @@ The app writes one folder per day:
 C:\AnkiPodcasts
   2026-06-13
     devops.mp3
-    apswe.mp3
+    swe.mp3
     _metadata
       devops
         cards.json
         script.txt
         generated.json
-      apswe
+      swe
         cards.json
         script.txt
         generated.json
@@ -172,12 +172,12 @@ Current examples:
 
 ```json
 {
-  "Name": "DailyApSwe",
-  "AnkiQuery": "deck:\"Career::ApSwe\" is:due",
+  "Name": "DailySWE",
+  "AnkiQuery": "deck:\"Career::SWE\" is:due",
   "TargetMinutes": 30,
   "MaxCards": 10,
   "MultiSpeaker": true,
-  "OutputSlug": "apswe"
+  "OutputSlug": "swe"
 }
 ```
 
@@ -209,10 +209,10 @@ Generate one profile:
 dotnet run --project .\AnkiPodcastGenerator\AnkiPodcastGenerator.csproj -- generate DailyDevOps
 ```
 
-Generate AP SWE:
+Generate SWE:
 
 ```powershell
-dotnet run --project .\AnkiPodcastGenerator\AnkiPodcastGenerator.csproj -- generate DailyApSwe
+dotnet run --project .\AnkiPodcastGenerator\AnkiPodcastGenerator.csproj -- generate DailySwe
 ```
 
 ## Daily Automation
@@ -232,7 +232,7 @@ Run the same workflow manually:
 The runner currently generates:
 
 - `DailyDevOps`
-- `DailyApSwe`
+- `DailySWE`
 
 By default it writes to:
 
