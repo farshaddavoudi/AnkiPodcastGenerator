@@ -4,6 +4,9 @@ param(
     [string]$At = "10:00",
     [string[]]$Profiles = @("DailyDevOps", "DailyApSwe"),
     [string]$OutputFolder = "C:\Users\fdavo\OneDrive\AnkiPodcasts",
+    [string]$AnkiConnectUrl = "http://127.0.0.1:8765",
+    [int]$AnkiConnectTimeoutSeconds = 120,
+    [switch]$DoNotStartAnki,
     [switch]$RunNow
 )
 
@@ -21,13 +24,36 @@ if ([string]::IsNullOrWhiteSpace($env:AVALAI_API_KEY) -and
     Write-Warning "AVALAI_API_KEY is not visible in this PowerShell session. Set it as a User environment variable before relying on the scheduled task."
 }
 
-$profileArgument = ($Profiles | ForEach-Object { "`"$($_.Replace('"', '\"'))`"" }) -join " "
+function ConvertTo-PowerShellSingleQuotedLiteral {
+    param([string]$Value)
+
+    return "'" + ($Value -replace "'", "''") + "'"
+}
+
+$runnerLiteral = ConvertTo-PowerShellSingleQuotedLiteral -Value $RunnerPath
+$outputFolderLiteral = ConvertTo-PowerShellSingleQuotedLiteral -Value $OutputFolder
+$ankiConnectUrlLiteral = ConvertTo-PowerShellSingleQuotedLiteral -Value $AnkiConnectUrl
+$profileArgument = ($Profiles | ForEach-Object {
+    ConvertTo-PowerShellSingleQuotedLiteral -Value $_
+}) -join ", "
+
+$runnerCommand = @(
+    "& $runnerLiteral"
+    "-OutputFolder $outputFolderLiteral"
+    "-AnkiConnectUrl $ankiConnectUrlLiteral"
+    "-AnkiConnectTimeoutSeconds $AnkiConnectTimeoutSeconds"
+    "-Profiles @($profileArgument)"
+) -join " "
+
+if ($DoNotStartAnki) {
+    $runnerCommand += " -DoNotStartAnki"
+}
+
+$encodedRunnerCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($runnerCommand))
 $arguments = @(
     "-NoProfile",
     "-ExecutionPolicy", "Bypass",
-    "-File", "`"$RunnerPath`"",
-    "-OutputFolder", "`"$OutputFolder`"",
-    "-Profiles", $profileArgument
+    "-EncodedCommand", $encodedRunnerCommand
 ) -join " "
 
 $action = New-ScheduledTaskAction `
@@ -61,6 +87,8 @@ Write-Host "Installed scheduled task '$TaskName'."
 Write-Host "Schedule: daily at $At"
 Write-Host "Runner: $RunnerPath"
 Write-Host "Output: $OutputFolder"
+Write-Host "AnkiConnect URL: $AnkiConnectUrl"
+Write-Host "AnkiConnect timeout: $AnkiConnectTimeoutSeconds seconds"
 Write-Host "Profiles: $($Profiles -join ', ')"
 
 if ($RunNow) {

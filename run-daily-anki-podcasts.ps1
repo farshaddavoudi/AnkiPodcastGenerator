@@ -77,6 +77,12 @@ function Find-AnkiExe {
 }
 
 function Ensure-AnkiConnect {
+    $parsedUri = $null
+    if (-not [Uri]::TryCreate($AnkiConnectUrl, [UriKind]::Absolute, [ref]$parsedUri) -or
+        $parsedUri.Scheme -notin @("http", "https")) {
+        throw "Invalid AnkiConnect URL '$AnkiConnectUrl'. If this value is a profile name, reinstall the scheduled task with the current install-daily-anki-podcast-task.ps1 script."
+    }
+
     if (Test-AnkiConnect -Url $AnkiConnectUrl) {
         Write-RunLog "AnkiConnect is already available at $AnkiConnectUrl."
         return
@@ -127,6 +133,7 @@ function Invoke-Generator {
 Write-RunLog "Starting daily Anki podcast run."
 Write-RunLog "Project root: $ProjectRoot"
 Write-RunLog "Output folder: $OutputFolder"
+Write-RunLog "AnkiConnect URL: $AnkiConnectUrl"
 Write-RunLog "Profiles: $($Profiles -join ', ')"
 
 if (-not (Test-Path -LiteralPath $ProjectFile)) {

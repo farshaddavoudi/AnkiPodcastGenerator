@@ -35,6 +35,9 @@ public sealed class AnkiConnectClient : IAnkiConnectClient
     public Task<int> GetVersionAsync(CancellationToken cancellationToken) =>
         InvokeAsync<int>("version", null, cancellationToken);
 
+    public Task SyncAsync(CancellationToken cancellationToken) =>
+        InvokeVoidAsync("sync", null, cancellationToken);
+
     public Task<IReadOnlyList<long>> FindCardsAsync(string query, CancellationToken cancellationToken) =>
         InvokeAsync<IReadOnlyList<long>>("findCards", new { query }, cancellationToken);
 
@@ -69,6 +72,37 @@ public sealed class AnkiConnectClient : IAnkiConnectClient
 
     private async Task<T> InvokeAsync<T>(string action, object? parameters, CancellationToken cancellationToken)
     {
+        using var document = await InvokeRawAsync(action, parameters, cancellationToken);
+        var root = document.RootElement;
+
+        if (!root.TryGetProperty("result", out var resultElement) ||
+            resultElement.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+        {
+            throw new InvalidOperationException($"AnkiConnect action '{action}' returned no result. Body: {root.GetRawText()}");
+        }
+
+        var result = resultElement.Deserialize<T>(JsonOptions)
+            ?? throw new InvalidOperationException($"AnkiConnect action '{action}' returned an unreadable result.");
+
+        _logger.LogDebug("AnkiConnect action {Action} completed", action);
+        return result;
+    }
+
+    private async Task InvokeVoidAsync(string action, object? parameters, CancellationToken cancellationToken)
+    {
+        using var document = await InvokeRawAsync(action, parameters, cancellationToken);
+        var root = document.RootElement;
+
+        if (!root.TryGetProperty("result", out _))
+        {
+            throw new InvalidOperationException($"AnkiConnect action '{action}' returned no result field. Body: {root.GetRawText()}");
+        }
+
+        _logger.LogDebug("AnkiConnect action {Action} completed", action);
+    }
+
+    private async Task<JsonDocument> InvokeRawAsync(string action, object? parameters, CancellationToken cancellationToken)
+    {
         object request = parameters is null
             ? new { action, version = 6 }
             : new { action, version = 6, @params = parameters };
@@ -84,7 +118,7 @@ public sealed class AnkiConnectClient : IAnkiConnectClient
                 $"AnkiConnect HTTP request failed with status {(int)response.StatusCode}. Body: {responseBody}");
         }
 
-        using var document = JsonDocument.Parse(responseBody);
+        var document = JsonDocument.Parse(responseBody);
         var root = document.RootElement;
 
         if (root.TryGetProperty("error", out var errorElement) &&
@@ -93,21 +127,12 @@ public sealed class AnkiConnectClient : IAnkiConnectClient
             var error = errorElement.GetString();
             if (!string.IsNullOrWhiteSpace(error))
             {
+                document.Dispose();
                 throw new InvalidOperationException($"AnkiConnect action '{action}' failed: {error}");
             }
         }
 
-        if (!root.TryGetProperty("result", out var resultElement) ||
-            resultElement.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
-        {
-            throw new InvalidOperationException($"AnkiConnect action '{action}' returned no result. Body: {responseBody}");
-        }
-
-        var result = resultElement.Deserialize<T>(JsonOptions)
-            ?? throw new InvalidOperationException($"AnkiConnect action '{action}' returned an unreadable result.");
-
-        _logger.LogDebug("AnkiConnect action {Action} completed", action);
-        return result;
+        return document;
     }
 
     private static string ExtractField(Dictionary<string, AnkiFieldDto> fields, string preferredName, int index)

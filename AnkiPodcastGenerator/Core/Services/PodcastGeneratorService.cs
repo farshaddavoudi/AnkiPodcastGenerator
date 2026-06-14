@@ -20,6 +20,7 @@ public sealed class PodcastGeneratorService(
     ITextToSpeechProvider textToSpeechProvider,
     IMultiSpeakerTextToSpeechProvider multiSpeakerTextToSpeechProvider,
     IPodcastScriptParser scriptParser,
+    IOptions<AnkiOptions> ankiOptions,
     IOptions<PodcastOptions> podcastOptions,
     IOptions<AvalAiOptions> avalAiOptions,
     ILogger<PodcastGeneratorService> logger)
@@ -39,6 +40,8 @@ public sealed class PodcastGeneratorService(
         var options = podcastOptions.Value;
         var ankiQuery = string.IsNullOrWhiteSpace(profile.AnkiQuery) ? "is:due" : profile.AnkiQuery;
         var effectiveMaxCards = maxCards ?? profile.MaxCards ?? options.MaxCards;
+
+        await SyncBeforeQueryIfConfiguredAsync(cancellationToken);
 
         var cardIds = await ankiConnectClient.FindCardsAsync(ankiQuery, cancellationToken);
         var cards = await ankiConnectClient.CardsInfoAsync(cardIds, cancellationToken);
@@ -74,6 +77,8 @@ public sealed class PodcastGeneratorService(
 
         var ankiVersion = await ankiConnectClient.GetVersionAsync(cancellationToken);
         logger.LogInformation("AnkiConnect connectivity OK. Version={AnkiConnectVersion}", ankiVersion);
+
+        await SyncBeforeQueryIfConfiguredAsync(cancellationToken);
 
         var cardIds = await ankiConnectClient.FindCardsAsync(ankiQuery, cancellationToken);
         logger.LogInformation("AnkiConnect returned {CardCount} cards", cardIds.Count);
@@ -218,6 +223,19 @@ public sealed class PodcastGeneratorService(
             avalAi.VoiceB,
             outputPaths.Mp3Path,
             cancellationToken);
+    }
+
+    private async Task SyncBeforeQueryIfConfiguredAsync(CancellationToken cancellationToken)
+    {
+        if (!ankiOptions.Value.SyncBeforeQuery)
+        {
+            logger.LogDebug("Skipping Anki sync before card query because Anki:SyncBeforeQuery is disabled");
+            return;
+        }
+
+        logger.LogInformation("Synchronizing Anki before querying cards");
+        await ankiConnectClient.SyncAsync(cancellationToken);
+        logger.LogInformation("Anki sync completed");
     }
 
     private static IReadOnlyList<AnkiCard> OrderCardsForReview(IReadOnlyList<AnkiCard> cards) =>

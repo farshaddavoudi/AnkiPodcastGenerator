@@ -32,6 +32,7 @@ The goal is not to replace Anki reviews. The goal is to warm up your memory befo
 
 ```text
 AnkiConnect
+  -> optionally sync Anki with AnkiWeb
   -> find due cards
   -> load card info
   -> sort near Anki review order
@@ -102,6 +103,8 @@ The current storage layer writes files; a later delivery layer can publish those
 5. ffmpeg available on `PATH`
 6. AvalAI API key
 
+For fresh due-card results across desktop, phone, and tablet, configure desktop Anki sync with AnkiWeb before relying on scheduled podcast generation.
+
 Check AnkiConnect:
 
 ```powershell
@@ -121,7 +124,8 @@ Important sections:
 ```json
 {
   "Anki": {
-    "BaseUrl": "http://127.0.0.1:8765"
+    "BaseUrl": "http://127.0.0.1:8765",
+    "SyncBeforeQuery": true
   },
   "Podcast": {
     "OutputFolder": "C:\\AnkiPodcasts",
@@ -140,6 +144,16 @@ Important sections:
   }
 }
 ```
+
+`Anki:SyncBeforeQuery` controls whether the app asks AnkiConnect to run Anki's normal sync before fetching due cards. It is enabled by default so reviews completed on mobile or tablet can update this PC before `findCards` runs.
+
+To disable pre-query sync for a run:
+
+```powershell
+$env:Anki__SyncBeforeQuery = "false"
+```
+
+Anki must be open, AnkiConnect must be running, and the active Anki profile must already be connected to AnkiWeb. If Anki needs a first-time upload/download choice or hits a sync conflict, Anki may show a prompt; resolve that in Anki before running unattended automation.
 
 Do not commit API keys. Keep `AvalAi:ApiKey` empty and set an environment variable instead:
 
@@ -223,6 +237,12 @@ Install a Windows scheduled task:
 .\install-daily-anki-podcast-task.ps1 -At "10:00"
 ```
 
+Install with explicit profiles:
+
+```powershell
+.\install-daily-anki-podcast-task.ps1 -At "10:00" -Profiles DailyDevOps, DailyApSwe
+```
+
 Run the same workflow manually:
 
 ```powershell
@@ -257,6 +277,8 @@ Windows Task Scheduler stores script paths as absolute paths. If you move or clo
 ```powershell
 .\install-daily-anki-podcast-task.ps1 -At "10:00"
 ```
+
+Reinstall the task after changing the profile list or runner script. The installer writes an encoded PowerShell command so multiple profile names are passed to the runner as a real array.
 
 ## Caching
 

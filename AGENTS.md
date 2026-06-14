@@ -9,13 +9,14 @@ Guidance for AI coding agents working on this project.
 Flow:
 
 1. Call AnkiConnect.
-2. Fetch due card IDs with `findCards`.
-3. Fetch card details with `cardsInfo`.
-4. Save a card snapshot JSON.
-5. Generate a two-host script through AvalAI chat completions.
-6. Generate MP3 audio through AvalAI `/v1/audio/speech`.
-7. For multi-speaker mode, generate one MP3 per `[A]` / `[B]` segment and merge with `ffmpeg`.
-8. Reuse an existing MP3 when card hash and generation settings are unchanged.
+2. If `Anki:SyncBeforeQuery` is enabled, call AnkiConnect `sync` before querying due cards.
+3. Fetch due card IDs with `findCards`.
+4. Fetch card details with `cardsInfo`.
+5. Save a card snapshot JSON.
+6. Generate a two-host script through AvalAI chat completions.
+7. Generate MP3 audio through AvalAI `/v1/audio/speech`.
+8. For multi-speaker mode, generate one MP3 per `[A]` / `[B]` segment and merge with `ffmpeg`.
+9. Reuse an existing MP3 when card hash and generation settings are unchanged.
 
 ## Layout
 
@@ -61,6 +62,7 @@ The app also accepts `AvalAi__ApiKey` or `AvalAi:ApiKey`, but environment variab
 ## Current Defaults
 
 - `DailyDevOps` query: `deck:"Career::DevOps" is:due`
+- Anki sync before due-card queries is enabled by default (`Anki:SyncBeforeQuery=true`).
 - Multi-speaker is enabled by default.
 - Host A voice: `Kore`
 - Host B voice: `Umbriel`
@@ -72,9 +74,12 @@ The app also accepts `AvalAi__ApiKey` or `AvalAi:ApiKey`, but environment variab
 ## Implementation Rules
 
 - Keep provider boundaries behind interfaces in `Core/Interfaces`.
+- Keep AnkiWeb sync behind `IAnkiConnectClient`; do not call AnkiConnect HTTP directly from orchestration code.
+- When `Anki:SyncBeforeQuery` is true, sync before `findCards` in generation and preview flows.
 - Do not put HTTP or filesystem details into domain models.
 - Preserve UTF-8 JSON handling for AnkiConnect and AvalAI.
 - Keep logs useful: card count, token usage, duration, output file, and provider/model failures.
+- Keep scheduled-task profile arguments array-safe. The installer uses `-EncodedCommand`; avoid switching it back to `powershell.exe -File ... -Profiles "A" "B"` because Windows PowerShell can bind the second profile as another positional parameter.
 - Preserve cache correctness. If output-affecting settings change, update the generation settings hash.
 - Do not reuse an old single-speaker MP3 for multi-speaker output.
 - Use `ffmpeg` only in `IAudioCombiner` implementations.
