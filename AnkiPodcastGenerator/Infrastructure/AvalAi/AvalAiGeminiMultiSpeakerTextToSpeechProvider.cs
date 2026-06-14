@@ -11,7 +11,8 @@ namespace AnkiPodcastGenerator.Infrastructure.AvalAi;
 
 public sealed class AvalAiGeminiMultiSpeakerTextToSpeechProvider : IMultiSpeakerTextToSpeechProvider
 {
-    private const int MaxTranscriptBytesPerRequest = 6500;
+    private const int MaxTranscriptBytesPerRequest = 3500;
+    private const int MaxAttemptsPerChunk = 3;
     private const int DefaultSampleRate = 24000;
     private const int DefaultChannels = 1;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -119,7 +120,7 @@ public sealed class AvalAiGeminiMultiSpeakerTextToSpeechProvider : IMultiSpeaker
 
         foreach (var model in GetTtsModelsToTry())
         {
-            for (var attempt = 1; attempt <= 2; attempt++)
+            for (var attempt = 1; attempt <= MaxAttemptsPerChunk; attempt++)
             {
                 using var request = CreateRequest(model, transcript, voiceA, voiceB);
 
@@ -143,8 +144,9 @@ public sealed class AvalAiGeminiMultiSpeakerTextToSpeechProvider : IMultiSpeaker
                         failures.Add(failure);
                         _logger.LogWarning("AvalAI native Gemini TTS {Failure}", failure);
 
-                        if (statusCode >= 500 && attempt < 2)
+                        if (statusCode >= 500 && attempt < MaxAttemptsPerChunk)
                         {
+                            await DelayBeforeRetryAsync(attempt, cancellationToken);
                             continue;
                         }
 
@@ -169,29 +171,33 @@ public sealed class AvalAiGeminiMultiSpeakerTextToSpeechProvider : IMultiSpeaker
                 }
                 catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
                 {
-                    var failure = attempt < 2
-                        ? $"model '{model}' timed out on chunk {chunkNumber}, attempt {attempt}. Retrying once."
+                    var failure = attempt < MaxAttemptsPerChunk
+                        ? $"model '{model}' timed out on chunk {chunkNumber}, attempt {attempt}. Retrying."
                         : $"model '{model}' timed out on chunk {chunkNumber}, attempt {attempt}.";
                     failures.Add(failure);
                     _logger.LogWarning("AvalAI native Gemini TTS {Failure}", failure);
 
-                    if (attempt == 2)
+                    if (attempt == MaxAttemptsPerChunk)
                     {
                         break;
                     }
+
+                    await DelayBeforeRetryAsync(attempt, cancellationToken);
                 }
                 catch (HttpRequestException ex)
                 {
-                    var failure = attempt < 2
-                        ? $"model '{model}' transport error on chunk {chunkNumber}, attempt {attempt}: {ex.Message}. Retrying once."
+                    var failure = attempt < MaxAttemptsPerChunk
+                        ? $"model '{model}' transport error on chunk {chunkNumber}, attempt {attempt}: {ex.Message}. Retrying."
                         : $"model '{model}' transport error on chunk {chunkNumber}, attempt {attempt}: {ex.Message}.";
                     failures.Add(failure);
                     _logger.LogWarning("AvalAI native Gemini TTS {Failure}", failure);
 
-                    if (attempt == 2)
+                    if (attempt == MaxAttemptsPerChunk)
                     {
                         break;
                     }
+
+                    await DelayBeforeRetryAsync(attempt, cancellationToken);
                 }
                 catch (JsonException ex)
                 {
@@ -314,6 +320,9 @@ public sealed class AvalAiGeminiMultiSpeakerTextToSpeechProvider : IMultiSpeaker
             yield return _options.TtsFallbackModel;
         }
     }
+
+    private static Task DelayBeforeRetryAsync(int attempt, CancellationToken cancellationToken) =>
+        Task.Delay(TimeSpan.FromSeconds(10 * attempt), cancellationToken);
 
     private static NativeInlineAudio ExtractInlineAudio(string responseBody, string model)
     {
