@@ -194,7 +194,7 @@ public sealed class AvalAiPodcastScriptGenerator : IPodcastScriptGenerator
     private static int CalculateMaxCompletionTokens(int targetMinutes)
     {
         var normalizedTarget = Math.Max(1, targetMinutes);
-        return Math.Clamp(normalizedTarget * 160, 220, 12_000);
+        return Math.Clamp(normalizedTarget * 320, 440, 12_000);
     }
 
     private void EnsureApiKeyConfigured()

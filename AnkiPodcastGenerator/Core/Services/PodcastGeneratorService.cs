@@ -26,7 +26,7 @@ public sealed class PodcastGeneratorService(
     ILogger<PodcastGeneratorService> logger)
     : IPodcastGeneratorService
 {
-    private const string PromptVersion = "slow-conversation-v2";
+    private const string PromptVersion = "slow-conversation-v3";
 
     public Task<int> TestAnkiConnectivityAsync(CancellationToken cancellationToken) =>
         ankiConnectClient.GetVersionAsync(cancellationToken);
