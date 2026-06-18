@@ -20,8 +20,8 @@ builder.Services.Configure<AnkiOptions>(builder.Configuration.GetSection("Anki")
 builder.Services.Configure<PodcastOptions>(builder.Configuration.GetSection("Podcast"));
 builder.Services.Configure<AvalAiOptions>(builder.Configuration.GetSection("AvalAi"));
 
-var profiles = builder.Configuration.GetSection("Profiles").Get<List<PodcastProfile>>() ?? [];
-builder.Services.AddSingleton(new ProfilesOptions { Profiles = profiles });
+var decks = builder.Configuration.GetSection("Decks").Get<List<PodcastDeck>>() ?? [];
+builder.Services.AddSingleton(new DecksOptions { Decks = decks });
 
 builder.Services.PostConfigure<AvalAiOptions>(options =>
 {
@@ -44,7 +44,7 @@ builder.Services.AddHttpClient<IPodcastScriptGenerator, AvalAiPodcastScriptGener
 builder.Services.AddHttpClient<ITextToSpeechProvider, AvalAiTextToSpeechProvider>();
 builder.Services.AddHttpClient<IMultiSpeakerTextToSpeechProvider, AvalAiGeminiMultiSpeakerTextToSpeechProvider>();
 
-builder.Services.AddSingleton<IProfileProvider, ProfileProvider>();
+builder.Services.AddSingleton<IDeckProvider, DeckProvider>();
 builder.Services.AddSingleton<IOutputPathService, OutputPathService>();
 builder.Services.AddSingleton<ICardHashService, CardHashService>();
 builder.Services.AddSingleton<ICardSnapshotStore, FileCardSnapshotStore>();

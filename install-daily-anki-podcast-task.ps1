@@ -2,7 +2,8 @@
 param(
     [string]$TaskName = "Anki Podcast Generator Daily",
     [string]$At = "10:00",
-    [string[]]$Profiles = @("DailyDevOps", "DailyApSwe"),
+    [Alias("Profiles")]
+    [string[]]$Decks = @(),
     [string]$OutputFolder = "C:\Users\fdavo\OneDrive\AnkiPodcasts",
     [string]$AnkiConnectUrl = "http://127.0.0.1:8765",
     [int]$AnkiConnectTimeoutSeconds = 120,
@@ -33,17 +34,22 @@ function ConvertTo-PowerShellSingleQuotedLiteral {
 $runnerLiteral = ConvertTo-PowerShellSingleQuotedLiteral -Value $RunnerPath
 $outputFolderLiteral = ConvertTo-PowerShellSingleQuotedLiteral -Value $OutputFolder
 $ankiConnectUrlLiteral = ConvertTo-PowerShellSingleQuotedLiteral -Value $AnkiConnectUrl
-$profileArgument = ($Profiles | ForEach-Object {
+$deckArgument = ($Decks | ForEach-Object {
     ConvertTo-PowerShellSingleQuotedLiteral -Value $_
 }) -join ", "
 
-$runnerCommand = @(
+$runnerCommandParts = @(
     "& $runnerLiteral"
     "-OutputFolder $outputFolderLiteral"
     "-AnkiConnectUrl $ankiConnectUrlLiteral"
     "-AnkiConnectTimeoutSeconds $AnkiConnectTimeoutSeconds"
-    "-Profiles @($profileArgument)"
-) -join " "
+)
+
+if ($Decks.Count -gt 0) {
+    $runnerCommandParts += "-Decks @($deckArgument)"
+}
+
+$runnerCommand = $runnerCommandParts -join " "
 
 if ($DoNotStartAnki) {
     $runnerCommand += " -DoNotStartAnki"
@@ -89,7 +95,12 @@ Write-Host "Runner: $RunnerPath"
 Write-Host "Output: $OutputFolder"
 Write-Host "AnkiConnect URL: $AnkiConnectUrl"
 Write-Host "AnkiConnect timeout: $AnkiConnectTimeoutSeconds seconds"
-Write-Host "Profiles: $($Profiles -join ', ')"
+if ($Decks.Count -gt 0) {
+    Write-Host "Decks: $($Decks -join ', ')"
+}
+else {
+    Write-Host "Decks: all configured"
+}
 
 if ($RunNow) {
     Start-ScheduledTask -TaskName $TaskName

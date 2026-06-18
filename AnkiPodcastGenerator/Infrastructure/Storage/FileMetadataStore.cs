@@ -53,7 +53,11 @@ public sealed class FileMetadataStore : IMetadataStore
                 continue;
             }
 
-            if (!string.Equals(metadata.ProfileSlug, outputPaths.ProfileSlug, StringComparison.OrdinalIgnoreCase))
+            var metadataSlug = string.IsNullOrWhiteSpace(metadata.DeckSlug)
+                ? metadata.ProfileSlug
+                : metadata.DeckSlug;
+
+            if (!string.Equals(metadataSlug, outputPaths.DeckSlug, StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
@@ -79,7 +83,7 @@ public sealed class FileMetadataStore : IMetadataStore
     private static IEnumerable<string> FindCandidateMetadataFiles(OutputPaths outputPaths)
     {
         var candidates = new List<string>();
-        var legacyMetadataPath = Path.Combine(outputPaths.OutputFolder, outputPaths.ProfileSlug, "generated.json");
+        var legacyMetadataPath = Path.Combine(outputPaths.OutputFolder, outputPaths.DeckSlug, "generated.json");
         if (File.Exists(legacyMetadataPath))
         {
             candidates.Add(legacyMetadataPath);
@@ -89,7 +93,7 @@ public sealed class FileMetadataStore : IMetadataStore
         {
             var datedMetadataPaths = Directory
                 .EnumerateDirectories(outputPaths.OutputFolder)
-                .Select(directory => Path.Combine(directory, "_metadata", outputPaths.ProfileSlug, "generated.json"))
+                .Select(directory => Path.Combine(directory, "_metadata", outputPaths.DeckSlug, "generated.json"))
                 .Where(File.Exists)
                 .OrderByDescending(File.GetLastWriteTimeUtc);
 

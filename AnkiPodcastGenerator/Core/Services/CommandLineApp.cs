@@ -4,7 +4,7 @@ namespace AnkiPodcastGenerator.Core.Services;
 
 public sealed class CommandLineApp(
     IPodcastGeneratorService podcastGenerator,
-    IProfileProvider profileProvider)
+    IDeckProvider deckProvider)
 {
     public async Task<int> RunAsync(string[] args)
     {
@@ -24,15 +24,12 @@ public sealed class CommandLineApp(
 
         if (args.Length == 2 && Is(args[0], "generate"))
         {
-            var result = await podcastGenerator.GenerateAsync(args[1], cancellationTokenSource.Token);
-            Console.WriteLine(result.Message);
+            return await GenerateDeckAsync(args[1], cancellationTokenSource.Token);
+        }
 
-            if (!string.IsNullOrWhiteSpace(result.Mp3Path))
-            {
-                Console.WriteLine(result.Mp3Path);
-            }
-
-            return result.Success ? 0 : 1;
+        if (args.Length == 1 && Is(args[0], "generate-all"))
+        {
+            return await GenerateAllDecksAsync(cancellationTokenSource.Token);
         }
 
         if ((args.Length == 2 || args.Length == 3) && Is(args[0], "preview"))
@@ -66,15 +63,67 @@ public sealed class CommandLineApp(
     {
         Console.WriteLine("Usage:");
         Console.WriteLine("  AnkiPodcastGenerator test-anki");
-        Console.WriteLine("  AnkiPodcastGenerator preview <profile> [count]");
-        Console.WriteLine("  AnkiPodcastGenerator generate <profile>");
+        Console.WriteLine("  AnkiPodcastGenerator preview <deck-name> [count]");
+        Console.WriteLine("  AnkiPodcastGenerator generate <deck-name>");
+        Console.WriteLine("  AnkiPodcastGenerator generate-all");
         Console.WriteLine();
-        Console.WriteLine("Profiles:");
+        Console.WriteLine("Configured decks:");
 
-        foreach (var profile in profileProvider.GetAllProfiles())
+        foreach (var deck in deckProvider.GetAllDecks())
         {
-            Console.WriteLine($"  {profile.Name}");
+            Console.WriteLine($"  {deck.DeckName} (MaxCards={deck.MaxCards})");
         }
+    }
+
+    private async Task<int> GenerateDeckAsync(string deckName, CancellationToken cancellationToken)
+    {
+        var result = await podcastGenerator.GenerateAsync(deckName, cancellationToken);
+        Console.WriteLine(result.Message);
+
+        if (!string.IsNullOrWhiteSpace(result.Mp3Path))
+        {
+            Console.WriteLine(result.Mp3Path);
+        }
+
+        return result.Success ? 0 : 1;
+    }
+
+    private async Task<int> GenerateAllDecksAsync(CancellationToken cancellationToken)
+    {
+        var decks = deckProvider.GetAllDecks();
+        if (decks.Count == 0)
+        {
+            Console.Error.WriteLine("No decks are configured. Add entries to the Decks list in appsettings.json.");
+            return 2;
+        }
+
+        var exitCode = 0;
+        foreach (var deck in decks)
+        {
+            Console.WriteLine($"Generating deck: {deck.DeckName}");
+
+            try
+            {
+                var result = await podcastGenerator.GenerateAsync(deck.DeckName, cancellationToken);
+                Console.WriteLine(result.Message);
+
+                if (!string.IsNullOrWhiteSpace(result.Mp3Path))
+                {
+                    Console.WriteLine(result.Mp3Path);
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                exitCode = 1;
+                Console.Error.WriteLine($"Failed deck '{deck.DeckName}': {ex.Message}");
+            }
+        }
+
+        return exitCode;
     }
 
     private static bool Is(string actual, string expected) =>

@@ -9,10 +9,10 @@ namespace AnkiPodcastGenerator.Infrastructure.Storage;
 
 public sealed class OutputPathService(IOptions<PodcastOptions> options) : IOutputPathService
 {
-    public OutputPaths GetPaths(PodcastProfile profile, DateOnly date)
+    public OutputPaths GetPaths(PodcastDeck deck, DateOnly date)
     {
         var outputFolder = options.Value.OutputFolder;
-        var slug = GetSlug(profile);
+        var slug = GetSlug(deck);
         var datePrefix = date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         var dateFolder = Path.Combine(outputFolder, datePrefix);
         var metadataFolder = Path.Combine(dateFolder, "_metadata", slug);
@@ -26,20 +26,14 @@ public sealed class OutputPathService(IOptions<PodcastOptions> options) : IOutpu
             Path.Combine(metadataFolder, "generated.json"));
     }
 
-    public string GetSlug(PodcastProfile profile)
+    public string GetSlug(PodcastDeck deck)
     {
-        if (!string.IsNullOrWhiteSpace(profile.OutputSlug))
+        if (!string.IsNullOrWhiteSpace(deck.OutputSlug))
         {
-            return Sanitize(profile.OutputSlug);
+            return Sanitize(deck.OutputSlug);
         }
 
-        var name = profile.Name;
-        if (name.StartsWith("Daily", StringComparison.OrdinalIgnoreCase) && name.Length > "Daily".Length)
-        {
-            name = name["Daily".Length..];
-        }
-
-        return Sanitize(name);
+        return Sanitize(deck.DeckName);
     }
 
     private static string Sanitize(string value)

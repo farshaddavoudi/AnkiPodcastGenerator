@@ -1,9 +1,18 @@
+using System.Text.Json.Serialization;
+
 namespace AnkiPodcastGenerator.Core.Models;
 
 public sealed class GeneratedPodcastMetadata
 {
-    public string ProfileName { get; set; } = string.Empty;
-    public string ProfileSlug { get; set; } = string.Empty;
+    public string DeckName { get; set; } = string.Empty;
+    public string DeckSlug { get; set; } = string.Empty;
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public string? ProfileName { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public string? ProfileSlug { get; set; }
+
     public string AnkiQuery { get; set; } = string.Empty;
     public string CardHash { get; set; } = string.Empty;
     public string GenerationSettingsHash { get; set; } = string.Empty;

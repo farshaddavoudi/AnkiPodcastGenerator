@@ -6,7 +6,7 @@ public interface IPodcastScriptGenerator
 {
     Task<ScriptGenerationResult> GenerateScriptAsync(
         IReadOnlyList<AnkiCard> cards,
-        PodcastProfile profile,
+        PodcastDeck deck,
         int targetMinutes,
         CancellationToken cancellationToken);
 }

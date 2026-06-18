@@ -35,7 +35,7 @@ public sealed class AvalAiPodcastScriptGenerator : IPodcastScriptGenerator
 
     public async Task<ScriptGenerationResult> GenerateScriptAsync(
         IReadOnlyList<AnkiCard> cards,
-        PodcastProfile profile,
+        PodcastDeck deck,
         int targetMinutes,
         CancellationToken cancellationToken)
     {
@@ -56,7 +56,7 @@ public sealed class AvalAiPodcastScriptGenerator : IPodcastScriptGenerator
                 new
                 {
                     role = "user",
-                    content = BuildUserPrompt(cards, profile, targetMinutes)
+                    content = BuildUserPrompt(cards, deck, targetMinutes)
                 }
             }
         };
@@ -151,7 +151,7 @@ public sealed class AvalAiPodcastScriptGenerator : IPodcastScriptGenerator
         Spend more time on complex cards and less time on simple cards.
         """;
 
-    private static string BuildUserPrompt(IReadOnlyList<AnkiCard> cards, PodcastProfile profile, int targetMinutes)
+    private static string BuildUserPrompt(IReadOnlyList<AnkiCard> cards, PodcastDeck deck, int targetMinutes)
     {
         var compactCards = cards.Select((card, index) => new
         {
@@ -166,7 +166,7 @@ public sealed class AvalAiPodcastScriptGenerator : IPodcastScriptGenerator
         var cardsJson = JsonSerializer.Serialize(compactCards, JsonOptions);
 
         return $$"""
-        Create a two-host podcast script for profile "{{profile.Name}}".
+        Create a two-host podcast script for Anki deck "{{deck.DeckName}}".
         Target duration: about {{targetMinutes}} minutes.
 
         Requirements:

@@ -4,6 +4,6 @@ namespace AnkiPodcastGenerator.Core.Interfaces;
 
 public interface IOutputPathService
 {
-    OutputPaths GetPaths(PodcastProfile profile, DateOnly date);
-    string GetSlug(PodcastProfile profile);
+    OutputPaths GetPaths(PodcastDeck deck, DateOnly date);
+    string GetSlug(PodcastDeck deck);
 }

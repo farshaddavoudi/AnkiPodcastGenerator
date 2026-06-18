@@ -62,14 +62,14 @@ The app writes one folder per day:
 ```text
 C:\AnkiPodcasts
   2026-06-13
-    devops.mp3
-    swe.mp3
+    career-devops.mp3
+    career-apswe.mp3
     _metadata
-      devops
+      career-devops
         cards.json
         script.txt
         generated.json
-      swe
+      career-apswe
         cards.json
         script.txt
         generated.json
@@ -130,7 +130,6 @@ Important sections:
   "Podcast": {
     "OutputFolder": "C:\\AnkiPodcasts",
     "TargetMinutes": 30,
-    "MaxCards": 40,
     "ReuseIfSameCards": true,
     "MultiSpeaker": true
   },
@@ -141,7 +140,21 @@ Important sections:
     "TtsModel": "gemini-2.5-flash-tts",
     "VoiceA": "Kore",
     "VoiceB": "Algenib"
-  }
+  },
+  "Decks": [
+    {
+      "DeckName": "Career::DevOps",
+      "MaxCards": 10
+    },
+    {
+      "DeckName": "Career::ApSwe",
+      "MaxCards": 10
+    },
+    {
+      "DeckName": "English",
+      "MaxCards": 40
+    }
+  ]
 }
 ```
 
@@ -167,41 +180,33 @@ For scheduled runs, set it as a User environment variable:
 [Environment]::SetEnvironmentVariable("AVALAI_API_KEY", "my-key", "User")
 ```
 
-## Profiles
+## Decks
 
-Profiles define what Anki query to use and how many cards to include.
+The `Decks` list defines what each session can generate. Each entry names an actual Anki deck and the maximum number of due cards to include from that deck.
 
 Current examples:
 
 ```json
 {
-  "Name": "DailyDevOps",
-  "AnkiQuery": "deck:\"Career::DevOps\" is:due",
-  "TargetMinutes": 30,
-  "MaxCards": 10,
-  "MultiSpeaker": true,
-  "OutputSlug": "devops"
+  "DeckName": "Career::DevOps",
+  "MaxCards": 10
 }
 ```
 
 ```json
 {
-  "Name": "DailySWE",
-  "AnkiQuery": "deck:\"Career::SWE\" is:due",
-  "TargetMinutes": 30,
-  "MaxCards": 10,
-  "MultiSpeaker": true,
-  "OutputSlug": "swe"
+  "DeckName": "English",
+  "MaxCards": 40
 }
 ```
 
-Anki queries can be changed to match your decks, tags, or scheduling needs:
+The app builds the due-card query from the deck name:
 
 ```text
-deck:"Career::DevOps" is:due
-tag:linux is:due
-prop:due<=0
+deck:"<DeckName>" is:due
 ```
+
+For a trip or larger review session, edit the `MaxCards` values in this list or choose a subset with the runner's `-Decks` parameter. Optional per-deck fields are `TargetMinutes`, `MultiSpeaker`, and `OutputSlug`; omit them to use the global `Podcast` defaults and the deck-derived output filename.
 
 ## Commands
 
@@ -211,48 +216,49 @@ Connectivity check:
 dotnet run --project .\AnkiPodcastGenerator\AnkiPodcastGenerator.csproj -- test-anki
 ```
 
-Preview the first cards selected for a profile:
+Preview the first cards selected for a deck:
 
 ```powershell
-dotnet run --project .\AnkiPodcastGenerator\AnkiPodcastGenerator.csproj -- preview DailyDevOps 10
+dotnet run --project .\AnkiPodcastGenerator\AnkiPodcastGenerator.csproj -- preview "Career::DevOps" 10
 ```
 
-Generate one profile:
+Generate one deck:
 
 ```powershell
-dotnet run --project .\AnkiPodcastGenerator\AnkiPodcastGenerator.csproj -- generate DailyDevOps
+dotnet run --project .\AnkiPodcastGenerator\AnkiPodcastGenerator.csproj -- generate "Career::DevOps"
 ```
 
-Generate SWE:
+Generate every configured deck:
 
 ```powershell
-dotnet run --project .\AnkiPodcastGenerator\AnkiPodcastGenerator.csproj -- generate DailySwe
+dotnet run --project .\AnkiPodcastGenerator\AnkiPodcastGenerator.csproj -- generate-all
 ```
 
 ## Daily Automation
 
-Install a Windows scheduled task:
+Install a Windows scheduled task for all configured decks:
 
 ```powershell
 .\install-daily-anki-podcast-task.ps1 -At "10:00"
 ```
 
-Install with explicit profiles:
+Install with an explicit deck subset:
 
 ```powershell
-.\install-daily-anki-podcast-task.ps1 -At "10:00" -Profiles DailyDevOps, DailyApSwe
+.\install-daily-anki-podcast-task.ps1 -At "10:00" -Decks "Career::DevOps","Career::ApSwe"
 ```
 
-Run the same workflow manually:
+Run the same all-configured-decks workflow manually:
 
 ```powershell
 .\run-daily-anki-podcasts.ps1
 ```
 
-The runner currently generates:
+Run a subset manually:
 
-- `DailyDevOps`
-- `DailySWE`
+```powershell
+.\run-daily-anki-podcasts.ps1 -Decks "Career::DevOps","English"
+```
 
 By default it writes to:
 
@@ -278,7 +284,7 @@ Windows Task Scheduler stores script paths as absolute paths. If you move or clo
 .\install-daily-anki-podcast-task.ps1 -At "10:00"
 ```
 
-Reinstall the task after changing the profile list or runner script. The installer writes an encoded PowerShell command so multiple profile names are passed to the runner as a real array.
+Reinstall the task after changing the scheduled deck subset or runner script. The installer writes an encoded PowerShell command so multiple deck names are passed to the runner as a real array.
 
 ## Caching
 
@@ -329,7 +335,7 @@ This keeps the repo focused on source code, configuration, and automation script
 - Add OpenRouter script-generation provider.
 - Add Telegram delivery.
 - Add private podcast RSS generation.
-- Add per-profile delivery settings.
+- Add per-deck delivery settings.
 - Add retention policy for old daily folders.
 - Add tests around Anki card ordering and cache hash behavior.
-- Add a small UI for profile management.
+- Add a small UI for deck management.

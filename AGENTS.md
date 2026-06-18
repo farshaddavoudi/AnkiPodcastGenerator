@@ -21,10 +21,10 @@ Flow:
 ## Layout
 
 - `AnkiPodcastGenerator/Program.cs`: host, DI, config, logging, CLI entry point.
-- `AnkiPodcastGenerator/appsettings.json`: Anki, podcast, AvalAI, profile, and Serilog config.
+- `AnkiPodcastGenerator/appsettings.json`: Anki, podcast, AvalAI, deck, and Serilog config.
 - `AnkiPodcastGenerator/Core/Models`: domain records and metadata models.
 - `AnkiPodcastGenerator/Core/Interfaces`: provider and service boundaries.
-- `AnkiPodcastGenerator/Core/Services`: orchestration, CLI, profile lookup, script parsing.
+- `AnkiPodcastGenerator/Core/Services`: orchestration, CLI, deck lookup, script parsing.
 - `AnkiPodcastGenerator/Infrastructure/Anki`: AnkiConnect HTTP client.
 - `AnkiPodcastGenerator/Infrastructure/AvalAi`: AvalAI script and TTS clients.
 - `AnkiPodcastGenerator/Infrastructure/Storage`: file output, hashing, metadata, ffmpeg merge.
@@ -36,17 +36,18 @@ Run from `C:\Workspace\scripts\AnkiPodcastGenerator`:
 ```powershell
 dotnet build .\AnkiPodcastGenerator.slnx
 dotnet run --project .\AnkiPodcastGenerator\AnkiPodcastGenerator.csproj -- test-anki
-dotnet run --project .\AnkiPodcastGenerator\AnkiPodcastGenerator.csproj -- preview DailyDevOps 5
-dotnet run --project .\AnkiPodcastGenerator\AnkiPodcastGenerator.csproj -- generate DailyDevOps
+dotnet run --project .\AnkiPodcastGenerator\AnkiPodcastGenerator.csproj -- preview "Career::DevOps" 5
+dotnet run --project .\AnkiPodcastGenerator\AnkiPodcastGenerator.csproj -- generate "Career::DevOps"
+dotnet run --project .\AnkiPodcastGenerator\AnkiPodcastGenerator.csproj -- generate-all
 ```
 
 For local smoke tests, keep runs small:
 
 ```powershell
 $env:Podcast__OutputFolder = "C:\Temp\AnkiPodcasts"
-$env:Profiles__0__MaxCards = "2"
-$env:Profiles__0__TargetMinutes = "1"
-dotnet run --project .\AnkiPodcastGenerator\AnkiPodcastGenerator.csproj -- generate DailyDevOps
+$env:Decks__0__MaxCards = "2"
+$env:Decks__0__TargetMinutes = "1"
+dotnet run --project .\AnkiPodcastGenerator\AnkiPodcastGenerator.csproj -- generate "Career::DevOps"
 ```
 
 ## Secrets
@@ -61,7 +62,8 @@ The app also accepts `AvalAi__ApiKey` or `AvalAi:ApiKey`, but environment variab
 
 ## Current Defaults
 
-- `DailyDevOps` query: `deck:"Career::DevOps" is:due`
+- Configured decks live under `Decks`; each entry must set the actual Anki `DeckName` and positive `MaxCards`.
+- The app builds due-card queries as `deck:"<DeckName>" is:due`.
 - Anki sync before due-card queries is enabled by default (`Anki:SyncBeforeQuery=true`).
 - Multi-speaker is enabled by default.
 - Host A voice: `Kore`
@@ -79,7 +81,7 @@ The app also accepts `AvalAi__ApiKey` or `AvalAi:ApiKey`, but environment variab
 - Do not put HTTP or filesystem details into domain models.
 - Preserve UTF-8 JSON handling for AnkiConnect and AvalAI.
 - Keep logs useful: card count, token usage, duration, output file, and provider/model failures.
-- Keep scheduled-task profile arguments array-safe. The installer uses `-EncodedCommand`; avoid switching it back to `powershell.exe -File ... -Profiles "A" "B"` because Windows PowerShell can bind the second profile as another positional parameter.
+- Keep scheduled-task deck arguments array-safe. The installer uses `-EncodedCommand`; avoid switching it back to `powershell.exe -File ... -Decks "A" "B"` because Windows PowerShell can bind the second deck as another positional parameter.
 - Preserve cache correctness. If output-affecting settings change, update the generation settings hash.
 - Do not reuse an old single-speaker MP3 for multi-speaker output.
 - Use `ffmpeg` only in `IAudioCombiner` implementations.
@@ -94,4 +96,4 @@ dotnet build .\AnkiPodcastGenerator.slnx
 dotnet run --project .\AnkiPodcastGenerator\AnkiPodcastGenerator.csproj -- test-anki
 ```
 
-When changing generation behavior, run a small profile smoke test with `MaxCards=1` or `2`, then rerun the same command to verify cache reuse.
+When changing generation behavior, run a small deck smoke test with `MaxCards=1` or `2`, then rerun the same command to verify cache reuse.

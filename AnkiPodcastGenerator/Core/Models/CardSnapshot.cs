@@ -1,7 +1,7 @@
 namespace AnkiPodcastGenerator.Core.Models;
 
 public sealed record CardSnapshot(
-    string ProfileName,
+    string DeckName,
     string AnkiQuery,
     DateTimeOffset FetchedAtUtc,
     IReadOnlyList<AnkiCard> Cards);

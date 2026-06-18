@@ -10,7 +10,7 @@ using Microsoft.Extensions.Options;
 namespace AnkiPodcastGenerator.Core.Services;
 
 public sealed class PodcastGeneratorService(
-    IProfileProvider profileProvider,
+    IDeckProvider deckProvider,
     IAnkiConnectClient ankiConnectClient,
     ICardSnapshotStore cardSnapshotStore,
     ICardHashService cardHashService,
@@ -32,14 +32,13 @@ public sealed class PodcastGeneratorService(
         ankiConnectClient.GetVersionAsync(cancellationToken);
 
     public async Task<IReadOnlyList<AnkiCard>> PreviewCardsAsync(
-        string profileName,
+        string deckName,
         int? maxCards,
         CancellationToken cancellationToken)
     {
-        var profile = profileProvider.GetRequiredProfile(profileName);
-        var options = podcastOptions.Value;
-        var ankiQuery = string.IsNullOrWhiteSpace(profile.AnkiQuery) ? "is:due" : profile.AnkiQuery;
-        var effectiveMaxCards = maxCards ?? profile.MaxCards ?? options.MaxCards;
+        var deck = deckProvider.GetRequiredDeck(deckName);
+        var ankiQuery = BuildDueCardsQuery(deck);
+        var effectiveMaxCards = maxCards ?? deck.MaxCards;
 
         await SyncBeforeQueryIfConfiguredAsync(cancellationToken);
 
@@ -51,25 +50,25 @@ public sealed class PodcastGeneratorService(
             .ToArray();
     }
 
-    public async Task<PodcastGenerationResult> GenerateAsync(string profileName, CancellationToken cancellationToken)
+    public async Task<PodcastGenerationResult> GenerateAsync(string deckName, CancellationToken cancellationToken)
     {
         var stopwatch = Stopwatch.StartNew();
-        var profile = profileProvider.GetRequiredProfile(profileName);
+        var deck = deckProvider.GetRequiredDeck(deckName);
         var options = podcastOptions.Value;
         var avalAi = avalAiOptions.Value;
         var today = DateOnly.FromDateTime(DateTime.Now);
-        var outputPaths = outputPathService.GetPaths(profile, today);
+        var outputPaths = outputPathService.GetPaths(deck, today);
 
-        var targetMinutes = profile.TargetMinutes ?? options.TargetMinutes;
-        var maxCards = profile.MaxCards ?? options.MaxCards;
-        var multiSpeaker = profile.MultiSpeaker ?? options.MultiSpeaker;
-        var ankiQuery = string.IsNullOrWhiteSpace(profile.AnkiQuery) ? "is:due" : profile.AnkiQuery;
+        var targetMinutes = deck.TargetMinutes ?? options.TargetMinutes;
+        var maxCards = deck.MaxCards;
+        var multiSpeaker = deck.MultiSpeaker ?? options.MultiSpeaker;
+        var ankiQuery = BuildDueCardsQuery(deck);
 
         Directory.CreateDirectory(outputPaths.OutputFolder);
 
         logger.LogInformation(
-            "Starting podcast generation for profile {Profile}. Query={AnkiQuery}, TargetMinutes={TargetMinutes}, MaxCards={MaxCards}, MultiSpeaker={MultiSpeaker}",
-            profile.Name,
+            "Starting podcast generation for deck {DeckName}. Query={AnkiQuery}, TargetMinutes={TargetMinutes}, MaxCards={MaxCards}, MultiSpeaker={MultiSpeaker}",
+            deck.DeckName,
             ankiQuery,
             targetMinutes,
             maxCards,
@@ -96,13 +95,13 @@ public sealed class PodcastGeneratorService(
                 string.Join(", ", orderedCards.Select(card => card.CardId)));
         }
 
-        var snapshot = new CardSnapshot(profile.Name, ankiQuery, DateTimeOffset.UtcNow, orderedCards);
+        var snapshot = new CardSnapshot(deck.DeckName, ankiQuery, DateTimeOffset.UtcNow, orderedCards);
         await cardSnapshotStore.SaveAsync(snapshot, outputPaths.CardsJsonPath, cancellationToken);
         logger.LogInformation("Saved cards JSON to {CardsJsonPath}", outputPaths.CardsJsonPath);
 
         if (orderedCards.Length == 0)
         {
-            return new PodcastGenerationResult(true, false, 0, null, "No cards matched the profile query. No MP3 was generated.");
+            return new PodcastGenerationResult(true, false, 0, null, "No cards matched the deck query. No MP3 was generated.");
         }
 
         var cardHash = cardHashService.ComputeHash(orderedCards);
@@ -128,7 +127,7 @@ public sealed class PodcastGeneratorService(
             await ReusePreviousOutputAsync(previousMetadata, outputPaths, cancellationToken);
 
             var reusedMetadata = CreateMetadata(
-                profile,
+                deck,
                 outputPaths,
                 ankiQuery,
                 orderedCards,
@@ -156,7 +155,7 @@ public sealed class PodcastGeneratorService(
             return new PodcastGenerationResult(true, true, orderedCards.Length, outputPaths.Mp3Path, "Card set unchanged. Reused existing MP3.");
         }
 
-        var scriptResult = await scriptGenerator.GenerateScriptAsync(orderedCards, profile, targetMinutes, cancellationToken);
+        var scriptResult = await scriptGenerator.GenerateScriptAsync(orderedCards, deck, targetMinutes, cancellationToken);
         await WriteTextFileAsync(outputPaths.ScriptPath, scriptResult.Script, cancellationToken);
         logger.LogInformation("Saved script to {ScriptPath}", outputPaths.ScriptPath);
 
@@ -173,7 +172,7 @@ public sealed class PodcastGeneratorService(
         stopwatch.Stop();
 
         var metadata = CreateMetadata(
-            profile,
+            deck,
             outputPaths,
             ankiQuery,
             orderedCards,
@@ -279,7 +278,7 @@ public sealed class PodcastGeneratorService(
     }
 
     private static GeneratedPodcastMetadata CreateMetadata(
-        PodcastProfile profile,
+        PodcastDeck deck,
         OutputPaths outputPaths,
         string ankiQuery,
         IReadOnlyList<AnkiCard> cards,
@@ -298,8 +297,8 @@ public sealed class PodcastGeneratorService(
     {
         return new GeneratedPodcastMetadata
         {
-            ProfileName = profile.Name,
-            ProfileSlug = outputPaths.ProfileSlug,
+            DeckName = deck.DeckName,
+            DeckSlug = outputPaths.DeckSlug,
             AnkiQuery = ankiQuery,
             CardHash = cardHash,
             GenerationSettingsHash = generationSettingsHash,
@@ -331,6 +330,15 @@ public sealed class PodcastGeneratorService(
 
     private static bool SamePath(string left, string right) =>
         string.Equals(Path.GetFullPath(left), Path.GetFullPath(right), StringComparison.OrdinalIgnoreCase);
+
+    private static string BuildDueCardsQuery(PodcastDeck deck)
+    {
+        var escapedDeckName = deck.DeckName
+            .Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("\"", "\\\"", StringComparison.Ordinal);
+
+        return $"deck:\"{escapedDeckName}\" is:due";
+    }
 
     private static string ComputeGenerationSettingsHash(
         string ankiQuery,

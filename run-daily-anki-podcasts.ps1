@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [string[]]$Profiles = @("DailyDevOps", "DailyApSwe"),
+    [Alias("Profiles")]
+    [string[]]$Decks = @(),
     [string]$OutputFolder = "C:\Users\fdavo\OneDrive\AnkiPodcasts",
     [string]$AnkiConnectUrl = "http://127.0.0.1:8765",
     [int]$AnkiConnectTimeoutSeconds = 120,
@@ -80,7 +81,7 @@ function Ensure-AnkiConnect {
     $parsedUri = $null
     if (-not [Uri]::TryCreate($AnkiConnectUrl, [UriKind]::Absolute, [ref]$parsedUri) -or
         $parsedUri.Scheme -notin @("http", "https")) {
-        throw "Invalid AnkiConnect URL '$AnkiConnectUrl'. If this value is a profile name, reinstall the scheduled task with the current install-daily-anki-podcast-task.ps1 script."
+        throw "Invalid AnkiConnect URL '$AnkiConnectUrl'. If this value is a deck name, reinstall the scheduled task with the current install-daily-anki-podcast-task.ps1 script."
     }
 
     if (Test-AnkiConnect -Url $AnkiConnectUrl) {
@@ -113,12 +114,12 @@ function Ensure-AnkiConnect {
 }
 
 function Invoke-Generator {
-    param([string]$Profile)
+    param([string]$Deck)
 
-    Write-RunLog "Generating profile '$Profile'."
+    Write-RunLog "Generating deck '$Deck'."
     $env:Podcast__OutputFolder = $OutputFolder
 
-    $output = & dotnet run --project $ProjectFile -- generate $Profile 2>&1
+    $output = & dotnet run --project $ProjectFile -- generate $Deck 2>&1
     $exitCode = $LASTEXITCODE
 
     foreach ($line in $output) {
@@ -126,7 +127,23 @@ function Invoke-Generator {
     }
 
     if ($exitCode -ne 0) {
-        throw "Generator failed for profile '$Profile' with exit code $exitCode."
+        throw "Generator failed for deck '$Deck' with exit code $exitCode."
+    }
+}
+
+function Invoke-AllConfiguredDecks {
+    Write-RunLog "Generating all configured decks."
+    $env:Podcast__OutputFolder = $OutputFolder
+
+    $output = & dotnet run --project $ProjectFile -- generate-all 2>&1
+    $exitCode = $LASTEXITCODE
+
+    foreach ($line in $output) {
+        Write-RunLog ($line.ToString())
+    }
+
+    if ($exitCode -ne 0) {
+        throw "Generator failed for one or more configured decks with exit code $exitCode."
     }
 }
 
@@ -134,7 +151,12 @@ Write-RunLog "Starting daily Anki podcast run."
 Write-RunLog "Project root: $ProjectRoot"
 Write-RunLog "Output folder: $OutputFolder"
 Write-RunLog "AnkiConnect URL: $AnkiConnectUrl"
-Write-RunLog "Profiles: $($Profiles -join ', ')"
+if ($Decks.Count -gt 0) {
+    Write-RunLog "Decks: $($Decks -join ', ')"
+}
+else {
+    Write-RunLog "Decks: all configured"
+}
 
 if (-not (Test-Path -LiteralPath $ProjectFile)) {
     throw "Project file not found: $ProjectFile"
@@ -151,13 +173,24 @@ if ([string]::IsNullOrWhiteSpace($env:AVALAI_API_KEY)) {
 Ensure-AnkiConnect
 
 $failures = @()
-foreach ($profileName in $Profiles) {
+if ($Decks.Count -eq 0) {
     try {
-        Invoke-Generator -Profile $profileName
+        Invoke-AllConfiguredDecks
     }
     catch {
-        $failures += "${profileName}: $($_.Exception.Message)"
-        Write-RunLog "ERROR for '$profileName': $($_.Exception.Message)"
+        $failures += "all configured decks: $($_.Exception.Message)"
+        Write-RunLog "ERROR for all configured decks: $($_.Exception.Message)"
+    }
+}
+else {
+    foreach ($deckName in $Decks) {
+        try {
+            Invoke-Generator -Deck $deckName
+        }
+        catch {
+            $failures += "${deckName}: $($_.Exception.Message)"
+            Write-RunLog "ERROR for '$deckName': $($_.Exception.Message)"
+        }
     }
 }
 
