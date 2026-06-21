@@ -3,6 +3,7 @@ param(
     [string[]]$Decks = @(),
     [string]$OutputFolder = "C:\Users\fdavo\OneDrive\AnkiPodcasts",
     [string]$AnkiConnectUrl = "http://127.0.0.1:8765",
+    [string]$KokoroWorkingDirectory = "C:\Tools\kokoro-tts",
     [int]$AnkiConnectTimeoutSeconds = 120,
     [switch]$DoNotStartAnki
 )
@@ -25,6 +26,38 @@ function Get-ConfiguredDeckNames {
 
     $config = Get-Content -LiteralPath $appsettingsPath -Raw | ConvertFrom-Json
     return @($config.Decks | ForEach-Object { $_.DeckName })
+}
+
+function Get-EffectiveTextToSpeechProvider {
+    $appsettingsPath = Join-Path $ProjectRoot "AnkiPodcastGenerator\appsettings.json"
+    if (-not (Test-Path -LiteralPath $appsettingsPath)) {
+        throw "appsettings.json not found: $appsettingsPath"
+    }
+
+    $config = Get-Content -LiteralPath $appsettingsPath -Raw | ConvertFrom-Json
+    $profileName = [string]$config.Podcast.GenerationProfile
+
+    if (-not [string]::IsNullOrWhiteSpace($profileName)) {
+        $profileProperty = $config.GenerationProfiles.PSObject.Properties |
+            Where-Object { $_.Name -eq $profileName } |
+            Select-Object -First 1
+
+        if ($null -eq $profileProperty) {
+            throw "Configured generation profile '$profileName' was not found in appsettings.json."
+        }
+
+        $profileProvider = [string]$profileProperty.Value.TextToSpeechProvider
+        if (-not [string]::IsNullOrWhiteSpace($profileProvider)) {
+            return $profileProvider
+        }
+    }
+
+    $configuredProvider = [string]$config.Podcast.TextToSpeechProvider
+    if ([string]::IsNullOrWhiteSpace($configuredProvider)) {
+        return "AvalAi"
+    }
+
+    return $configuredProvider
 }
 
 function Assert-ConfiguredDecks {
@@ -180,6 +213,40 @@ function Find-AnkiExe {
     return $null
 }
 
+function Ensure-KokoroLocalTts {
+    param([string]$WorkingDirectory)
+
+    $command = Get-Command "kokoro-tts" -ErrorAction SilentlyContinue
+    if ($null -eq $command) {
+        throw "kokoro-tts was not found on PATH. Install it before running a local Kokoro generation profile."
+    }
+
+    if ([string]::IsNullOrWhiteSpace($WorkingDirectory)) {
+        throw "Kokoro working directory is empty. Set -KokoroWorkingDirectory to the folder containing kokoro-v1.0.onnx and voices-v1.0.bin."
+    }
+
+    $expandedWorkingDirectory = [Environment]::ExpandEnvironmentVariables($WorkingDirectory)
+    if (-not (Test-Path -LiteralPath $expandedWorkingDirectory -PathType Container)) {
+        throw "Kokoro working directory does not exist: $expandedWorkingDirectory"
+    }
+
+    $requiredFiles = @("kokoro-v1.0.onnx", "voices-v1.0.bin")
+    foreach ($fileName in $requiredFiles) {
+        $filePath = Join-Path $expandedWorkingDirectory $fileName
+        if (-not (Test-Path -LiteralPath $filePath -PathType Leaf)) {
+            throw "Missing Kokoro model file: $filePath"
+        }
+
+        if ((Get-Item -LiteralPath $filePath).Length -le 0) {
+            throw "Kokoro model file is empty: $filePath"
+        }
+    }
+
+    $env:Kokoro__WorkingDirectory = $expandedWorkingDirectory
+    Write-RunLog "Kokoro command: $($command.Source)"
+    Write-RunLog "Kokoro working directory: $expandedWorkingDirectory"
+}
+
 function Ensure-AnkiConnect {
     $parsedUri = $null
     if (-not [Uri]::TryCreate($AnkiConnectUrl, [UriKind]::Absolute, [ref]$parsedUri) -or
@@ -276,6 +343,8 @@ Write-RunLog "Starting daily Anki podcast run."
 Write-RunLog "Project root: $ProjectRoot"
 Write-RunLog "Output folder: $OutputFolder"
 Write-RunLog "AnkiConnect URL: $AnkiConnectUrl"
+$effectiveTtsProvider = Get-EffectiveTextToSpeechProvider
+Write-RunLog "Effective TTS provider: $effectiveTtsProvider"
 if ($Decks.Count -gt 0) {
     Write-RunLog "Decks: $($Decks -join ', ')"
 }
@@ -297,6 +366,10 @@ if ([string]::IsNullOrWhiteSpace($env:AVALAI_API_KEY)) {
 
 if ([string]::IsNullOrWhiteSpace($env:AVALAI_API_KEY)) {
     throw "AVALAI_API_KEY is not set. Set it as a User environment variable before using Task Scheduler."
+}
+
+if ($effectiveTtsProvider -in @("Kokoro", "LocalKokoro")) {
+    Ensure-KokoroLocalTts -WorkingDirectory $KokoroWorkingDirectory
 }
 
 Ensure-AnkiConnect

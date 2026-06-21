@@ -5,6 +5,7 @@ param(
     [string[]]$Decks = @(),
     [string]$OutputFolder = "C:\Users\fdavo\OneDrive\AnkiPodcasts",
     [string]$AnkiConnectUrl = "http://127.0.0.1:8765",
+    [string]$KokoroWorkingDirectory = "C:\Tools\kokoro-tts",
     [int]$AnkiConnectTimeoutSeconds = 120,
     [switch]$DoNotStartAnki,
     [switch]$RunNow
@@ -73,6 +74,7 @@ function ConvertTo-PowerShellSingleQuotedLiteral {
 $runnerLiteral = ConvertTo-PowerShellSingleQuotedLiteral -Value $RunnerPath
 $outputFolderLiteral = ConvertTo-PowerShellSingleQuotedLiteral -Value $OutputFolder
 $ankiConnectUrlLiteral = ConvertTo-PowerShellSingleQuotedLiteral -Value $AnkiConnectUrl
+$kokoroWorkingDirectoryLiteral = ConvertTo-PowerShellSingleQuotedLiteral -Value $KokoroWorkingDirectory
 $deckArgument = ($Decks | ForEach-Object {
     ConvertTo-PowerShellSingleQuotedLiteral -Value $_
 }) -join ", "
@@ -81,6 +83,7 @@ $runnerCommandParts = @(
     "& $runnerLiteral"
     "-OutputFolder $outputFolderLiteral"
     "-AnkiConnectUrl $ankiConnectUrlLiteral"
+    "-KokoroWorkingDirectory $kokoroWorkingDirectoryLiteral"
     "-AnkiConnectTimeoutSeconds $AnkiConnectTimeoutSeconds"
 )
 
@@ -133,6 +136,7 @@ Write-Host "Schedule: daily at $At"
 Write-Host "Runner: $RunnerPath"
 Write-Host "Output: $OutputFolder"
 Write-Host "AnkiConnect URL: $AnkiConnectUrl"
+Write-Host "Kokoro working directory: $KokoroWorkingDirectory"
 Write-Host "AnkiConnect timeout: $AnkiConnectTimeoutSeconds seconds"
 if ($Decks.Count -gt 0) {
     Write-Host "Decks: $($Decks -join ', ')"
