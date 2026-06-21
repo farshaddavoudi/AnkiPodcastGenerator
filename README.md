@@ -22,7 +22,9 @@ The goal is not to replace Anki reviews. The goal is to warm up your memory befo
 - C#
 - AnkiConnect
 - AvalAI API
+- Optional OpenRouter API for script generation
 - Gemini TTS through AvalAI native `v1beta`
+- Optional local Kokoro TTS
 - Serilog
 - Windows Task Scheduler
 - JSON configuration
@@ -53,7 +55,7 @@ The main implementation is intentionally split behind interfaces so providers ca
 - `IPcmAudioEncoder`
 - `IMetadataStore`
 
-AvalAI is the current provider because it supports the models used during MVP development. The design is not intended to be AvalAI-only. For example, script generation could later use OpenRouter, OpenAI, a local model server, or any OpenAI-compatible API by adding another `IPodcastScriptGenerator` implementation. TTS could also be swapped behind the TTS interfaces.
+Script generation can use AvalAI or OpenRouter behind `IPodcastScriptGenerator`. TTS can use AvalAI Gemini or local Kokoro behind the TTS interfaces.
 
 ## Output Layout
 
@@ -129,17 +131,80 @@ Important sections:
   },
   "Podcast": {
     "OutputFolder": "C:\\AnkiPodcasts",
+    "GenerationProfile": "Balanced",
+    "ScriptProvider": "AvalAi",
+    "TextToSpeechProvider": "AvalAi",
     "TargetMinutes": 30,
     "ReuseIfSameCards": true,
     "MultiSpeaker": true
   },
+  "GenerationProfiles": {
+    "Quality": {
+      "ScriptProvider": "AvalAi",
+      "TextToSpeechProvider": "AvalAi",
+      "ScriptModel": "claude-sonnet-4-6",
+      "TtsModel": "gemini-2.5-flash-tts",
+      "VoiceA": "Kore",
+      "VoiceB": "Algenib",
+      "MultiSpeaker": true
+    },
+    "QualityLocalTts": {
+      "ScriptProvider": "AvalAi",
+      "TextToSpeechProvider": "Kokoro",
+      "ScriptModel": "claude-sonnet-4-6",
+      "TtsModel": "kokoro-v1.0",
+      "VoiceA": "af_kore",
+      "VoiceB": "am_puck",
+      "MultiSpeaker": true
+    },
+    "Balanced": {
+      "ScriptProvider": "AvalAi",
+      "TextToSpeechProvider": "AvalAi",
+      "ScriptModel": "gemini-2.5-flash",
+      "TtsModel": "gemini-2.5-flash-tts",
+      "VoiceA": "Kore",
+      "VoiceB": "Algenib",
+      "MultiSpeaker": true
+    },
+    "LocalTts": {
+      "ScriptProvider": "AvalAi",
+      "TextToSpeechProvider": "Kokoro",
+      "ScriptModel": "gemini-2.5-flash",
+      "TtsModel": "kokoro-v1.0",
+      "VoiceA": "af_kore",
+      "VoiceB": "am_puck",
+      "MultiSpeaker": true
+    },
+    "GemmaOpenRouterLocalTts": {
+      "ScriptProvider": "OpenRouter",
+      "TextToSpeechProvider": "Kokoro",
+      "ScriptModel": "google/gemma-4-31b-it:free",
+      "TtsModel": "kokoro-v1.0",
+      "VoiceA": "af_kore",
+      "VoiceB": "am_puck",
+      "MultiSpeaker": true
+    }
+  },
   "AvalAi": {
     "BaseUrl": "https://api.avalai.ir",
     "ApiKey": "",
-    "ScriptModel": "claude-sonnet-4-5",
+    "ScriptModel": "claude-sonnet-4-6",
     "TtsModel": "gemini-2.5-flash-tts",
     "VoiceA": "Kore",
     "VoiceB": "Algenib"
+  },
+  "Kokoro": {
+    "Command": "kokoro-tts",
+    "WorkingDirectory": "",
+    "ModelName": "kokoro-v1.0",
+    "Language": "en-us",
+    "TimeoutSeconds": 900
+  },
+  "OpenRouter": {
+    "BaseUrl": "https://openrouter.ai/api/v1",
+    "ApiKey": "",
+    "Referer": "https://github.com/fdavo/AnkiPodcastGenerator",
+    "Title": "AnkiPodcastGenerator"
   },
   "Decks": [
     {
@@ -168,6 +233,60 @@ $env:Anki__SyncBeforeQuery = "false"
 
 Anki must be open, AnkiConnect must be running, and the active Anki profile must already be connected to AnkiWeb. If Anki needs a first-time upload/download choice or hits a sync conflict, Anki may show a prompt; resolve that in Anki before running unattended automation.
 
+## Cost Profiles
+
+`Podcast:GenerationProfile` selects the model/cost profile. The selected profile overlays `Podcast`, `AvalAi`, Kokoro, and OpenRouter settings at startup.
+
+Built-in profiles:
+
+- `Quality`: high-quality setup. Uses `claude-sonnet-4-6` for the script and `gemini-2.5-flash-tts` for AvalAI TTS.
+- `QualityLocalTts`: high-quality script setup with local Kokoro TTS to avoid cloud audio cost.
+- `Balanced`: default. Uses `gemini-2.5-flash` for the script and keeps `gemini-2.5-flash-tts` for audio quality.
+- `LocalTts`: uses `gemini-2.5-flash` for the script and local Kokoro for TTS.
+- `BudgetLocalTts`: uses `gemini-2.5-flash-lite-preview-09-2025` for the script and local Kokoro for TTS.
+- `GemmaOpenRouterLocalTts`: experimental. Uses OpenRouter `google/gemma-4-31b-it:free` for the script and local Kokoro for TTS.
+
+Switch for one PowerShell session:
+
+```powershell
+$env:Podcast__GenerationProfile = "Quality"
+```
+
+```powershell
+$env:Podcast__GenerationProfile = "LocalTts"
+```
+
+```powershell
+$env:OPENROUTER_API_KEY = "my-openrouter-key"
+$env:Podcast__GenerationProfile = "GemmaOpenRouterLocalTts"
+```
+
+Kokoro is not selected by default because it must be installed first. This PC has 16 GB RAM and no discrete GPU reported by `systeminfo`, so local TTS is the practical local offload point; local large LLM script generation is possible only with small quantized models and will usually cost too much quality.
+
+Kokoro setup outline:
+
+```powershell
+# Requires Python 3.11-3.12 and the kokoro-tts CLI.
+uv tool install kokoro-tts
+
+New-Item -ItemType Directory -Force -Path C:\Tools\kokoro-tts | Out-Null
+Invoke-WebRequest https://github.com/nazdridoy/kokoro-tts/releases/download/v1.0.0/voices-v1.0.bin -OutFile C:\Tools\kokoro-tts\voices-v1.0.bin
+Invoke-WebRequest https://github.com/nazdridoy/kokoro-tts/releases/download/v1.0.0/kokoro-v1.0.onnx -OutFile C:\Tools\kokoro-tts\kokoro-v1.0.onnx
+
+$env:Kokoro__WorkingDirectory = "C:\Tools\kokoro-tts"
+$env:Podcast__GenerationProfile = "LocalTts"
+```
+
+The local provider calls:
+
+```text
+kokoro-tts <input.txt> <output.mp3> --speed <speed> --lang en-us --voice <voice> --format mp3
+```
+
+For multi-speaker mode, it generates one MP3 per parsed `[A]` / `[B]` block with the configured Kokoro voices, then merges them through the existing `IAudioCombiner`.
+
+Generated scripts may include `[PAUSE:5]` on its own line between unrelated topic sections. Multi-speaker TTS turns that marker into an actual silence chunk during MP3 assembly.
+
 Do not commit API keys. Keep `AvalAi:ApiKey` empty and set an environment variable instead:
 
 ```powershell
@@ -178,6 +297,12 @@ For scheduled runs, set it as a User environment variable:
 
 ```powershell
 [Environment]::SetEnvironmentVariable("AVALAI_API_KEY", "my-key", "User")
+```
+
+For OpenRouter script profiles, use:
+
+```powershell
+$env:OPENROUTER_API_KEY = "my-openrouter-key"
 ```
 
 ## Decks
@@ -332,7 +457,6 @@ This keeps the repo focused on source code, configuration, and automation script
 
 ## Roadmap Ideas
 
-- Add OpenRouter script-generation provider.
 - Add Telegram delivery.
 - Add private podcast RSS generation.
 - Add per-deck delivery settings.

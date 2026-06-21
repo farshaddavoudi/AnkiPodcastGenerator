@@ -15,6 +15,16 @@ public sealed class PodcastScriptParser : IPodcastScriptParser
 
         while (reader.ReadLine() is { } line)
         {
+            var pauseSeconds = TryReadPauseMarker(line);
+            if (pauseSeconds is not null)
+            {
+                Flush();
+                segments.Add(new PodcastSegment('P', string.Empty, pauseSeconds.Value));
+                currentSpeaker = '\0';
+                buffer.Clear();
+                continue;
+            }
+
             var marker = TryReadMarker(line);
             if (marker is not null)
             {
@@ -77,5 +87,20 @@ public sealed class PodcastScriptParser : IPodcastScriptParser
             'B' => 'B',
             _ => null
         };
+    }
+
+    private static int? TryReadPauseMarker(string line)
+    {
+        var trimmed = line.Trim();
+        if (!trimmed.StartsWith("[PAUSE:", StringComparison.OrdinalIgnoreCase) ||
+            !trimmed.EndsWith(']'))
+        {
+            return null;
+        }
+
+        var secondsText = trimmed["[PAUSE:".Length..^1];
+        return int.TryParse(secondsText, out var seconds) && seconds > 0
+            ? seconds
+            : null;
     }
 }

@@ -1,6 +1,5 @@
 [CmdletBinding()]
 param(
-    [Alias("Profiles")]
     [string[]]$Decks = @(),
     [string]$OutputFolder = "C:\Users\fdavo\OneDrive\AnkiPodcasts",
     [string]$AnkiConnectUrl = "http://127.0.0.1:8765",
@@ -18,12 +17,116 @@ $RunLogPath = Join-Path $LogDirectory ("daily-run-{0:yyyyMMdd-HHmmss}.log" -f (G
 New-Item -ItemType Directory -Force -Path $LogDirectory | Out-Null
 New-Item -ItemType Directory -Force -Path $OutputFolder | Out-Null
 
+function Get-ConfiguredDeckNames {
+    $appsettingsPath = Join-Path $ProjectRoot "AnkiPodcastGenerator\appsettings.json"
+    if (-not (Test-Path -LiteralPath $appsettingsPath)) {
+        throw "appsettings.json not found: $appsettingsPath"
+    }
+
+    $config = Get-Content -LiteralPath $appsettingsPath -Raw | ConvertFrom-Json
+    return @($config.Decks | ForEach-Object { $_.DeckName })
+}
+
+function Assert-ConfiguredDecks {
+    param(
+        [string[]]$RequestedDecks,
+        [string[]]$ConfiguredDecks
+    )
+
+    if ($RequestedDecks.Count -eq 0) {
+        if ($ConfiguredDecks.Count -eq 0) {
+            throw "No decks are configured in appsettings.json."
+        }
+
+        return
+    }
+
+    $configuredLookup = @{}
+    foreach ($deck in $ConfiguredDecks) {
+        $configuredLookup[$deck.ToLowerInvariant()] = $deck
+    }
+
+    $unknown = @()
+    foreach ($requested in $RequestedDecks) {
+        if (-not $configuredLookup.ContainsKey($requested.ToLowerInvariant())) {
+            $unknown += $requested
+        }
+    }
+
+    if ($unknown.Count -gt 0) {
+        throw "Unknown deck name(s): $($unknown -join ', '). Scheduled deck names must match DeckName in appsettings.json. Configured decks: $($ConfiguredDecks -join ', ')"
+    }
+}
+
 function Write-RunLog {
     param([string]$Message)
 
     $line = "[{0:yyyy-MM-dd HH:mm:ss}] {1}" -f (Get-Date), $Message
     Write-Host $line
     Add-Content -Path $RunLogPath -Value $line -Encoding UTF8
+}
+
+function Write-RunLogError {
+    param(
+        [string]$Prefix,
+        [string]$Message
+    )
+
+    foreach ($line in ($Message -split "`r?`n")) {
+        if ([string]::IsNullOrWhiteSpace($line)) {
+            continue
+        }
+
+        Write-RunLog ($Prefix + $line.Trim())
+    }
+}
+
+function Show-AvalAiQuotaAlert {
+    param([string[]]$FailureMessages)
+
+    $combined = ($FailureMessages -join ' ')
+    if ($combined -notmatch 'AvalAI credits or quota|recharge your AvalAI|HTTP 429|HTTP 402') {
+        return
+    }
+
+    $alert = @"
+AvalAI credits or quota are exhausted.
+
+Open https://avalai.ir, sign in, and recharge your account.
+Then rerun the podcast generator or wait for the next scheduled run.
+"@
+
+    Write-RunLog "Showing AvalAI quota alert prompt."
+
+    try {
+        $popup = New-Object -ComObject WScript.Shell
+        [void]$popup.Popup(
+            $alert,
+            0,
+            'Anki Podcast Generator - AvalAI Recharge Required',
+            16 + 4096)
+        Write-RunLog "AvalAI quota alert prompt was dismissed."
+        return
+    }
+    catch {
+        Write-RunLog "WScript popup failed; falling back to Windows Forms message box. $($_.Exception.Message)"
+    }
+
+    try {
+        Add-Type -AssemblyName System.Windows.Forms
+        [void][System.Windows.Forms.MessageBox]::Show(
+            $alert,
+            'Anki Podcast Generator - AvalAI Recharge Required',
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Error,
+            [System.Windows.Forms.MessageBoxDefaultButton]::Button1,
+            [System.Windows.Forms.MessageBoxOptions]::ServiceNotification)
+        Write-RunLog "AvalAI quota alert prompt was dismissed."
+    }
+    catch {
+        Write-Host $alert
+        Write-RunLog "Unable to show AvalAI quota alert prompt. $($_.Exception.Message)"
+    }
 }
 
 function Test-AnkiConnect {
@@ -119,28 +222,50 @@ function Invoke-Generator {
     Write-RunLog "Generating deck '$Deck'."
     $env:Podcast__OutputFolder = $OutputFolder
 
-    $output = & dotnet run --project $ProjectFile -- generate $Deck 2>&1
-    $exitCode = $LASTEXITCODE
-
-    foreach ($line in $output) {
-        Write-RunLog ($line.ToString())
-    }
+    $exitCode = Invoke-DotnetGenerator -Arguments @(
+        "run",
+        "--project",
+        $ProjectFile,
+        "--",
+        "generate",
+        $Deck)
 
     if ($exitCode -ne 0) {
         throw "Generator failed for deck '$Deck' with exit code $exitCode."
     }
 }
 
-function Invoke-AllConfiguredDecks {
-    Write-RunLog "Generating all configured decks."
-    $env:Podcast__OutputFolder = $OutputFolder
+function Invoke-DotnetGenerator {
+    param([string[]]$Arguments)
 
-    $output = & dotnet run --project $ProjectFile -- generate-all 2>&1
-    $exitCode = $LASTEXITCODE
+    $previousErrorActionPreference = $ErrorActionPreference
+
+    try {
+        $ErrorActionPreference = "Continue"
+        $output = & dotnet @Arguments 2>&1
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
 
     foreach ($line in $output) {
         Write-RunLog ($line.ToString())
     }
+
+    return $exitCode
+}
+
+function Invoke-AllConfiguredDecks {
+    Write-RunLog "Generating all configured decks."
+    $env:Podcast__OutputFolder = $OutputFolder
+
+    $exitCode = Invoke-DotnetGenerator -Arguments @(
+        "run",
+        "--project",
+        $ProjectFile,
+        "--",
+        "generate-all")
 
     if ($exitCode -ne 0) {
         throw "Generator failed for one or more configured decks with exit code $exitCode."
@@ -155,12 +280,16 @@ if ($Decks.Count -gt 0) {
     Write-RunLog "Decks: $($Decks -join ', ')"
 }
 else {
-    Write-RunLog "Decks: all configured"
+    $configuredDecks = Get-ConfiguredDeckNames
+    Write-RunLog "Decks: all configured in appsettings.json ($($configuredDecks -join ', '))"
 }
 
 if (-not (Test-Path -LiteralPath $ProjectFile)) {
     throw "Project file not found: $ProjectFile"
 }
+
+$configuredDecks = Get-ConfiguredDeckNames
+Assert-ConfiguredDecks -RequestedDecks $Decks -ConfiguredDecks $configuredDecks
 
 if ([string]::IsNullOrWhiteSpace($env:AVALAI_API_KEY)) {
     $env:AVALAI_API_KEY = [Environment]::GetEnvironmentVariable("AVALAI_API_KEY", "User")
@@ -179,7 +308,7 @@ if ($Decks.Count -eq 0) {
     }
     catch {
         $failures += "all configured decks: $($_.Exception.Message)"
-        Write-RunLog "ERROR for all configured decks: $($_.Exception.Message)"
+        Write-RunLogError -Prefix "ERROR for all configured decks: " -Message $_.Exception.Message
     }
 }
 else {
@@ -189,12 +318,13 @@ else {
         }
         catch {
             $failures += "${deckName}: $($_.Exception.Message)"
-            Write-RunLog "ERROR for '$deckName': $($_.Exception.Message)"
+            Write-RunLogError -Prefix "ERROR for '$deckName': " -Message $_.Exception.Message
         }
     }
 }
 
 if ($failures.Count -gt 0) {
+    Show-AvalAiQuotaAlert -FailureMessages $failures
     Write-RunLog "Completed with failures: $($failures -join '; ')"
     exit 1
 }

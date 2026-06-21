@@ -6,12 +6,13 @@ using AnkiPodcastGenerator.Configuration;
 using AnkiPodcastGenerator.Core.Interfaces;
 using AnkiPodcastGenerator.Core.Models;
 using AnkiPodcastGenerator.Core.Services;
+using AnkiPodcastGenerator.Infrastructure.AvalAi;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
-namespace AnkiPodcastGenerator.Infrastructure.AvalAi;
+namespace AnkiPodcastGenerator.Infrastructure.OpenRouter;
 
-public sealed class AvalAiPodcastScriptGenerator : IPodcastScriptGenerator
+public sealed class OpenRouterPodcastScriptGenerator : IPodcastScriptGenerator
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -19,18 +20,21 @@ public sealed class AvalAiPodcastScriptGenerator : IPodcastScriptGenerator
     };
 
     private readonly HttpClient _httpClient;
-    private readonly AvalAiOptions _options;
-    private readonly ILogger<AvalAiPodcastScriptGenerator> _logger;
+    private readonly OpenRouterOptions _openRouterOptions;
+    private readonly AvalAiOptions _scriptOptions;
+    private readonly ILogger<OpenRouterPodcastScriptGenerator> _logger;
 
-    public AvalAiPodcastScriptGenerator(
+    public OpenRouterPodcastScriptGenerator(
         HttpClient httpClient,
-        IOptions<AvalAiOptions> options,
-        ILogger<AvalAiPodcastScriptGenerator> logger)
+        IOptions<OpenRouterOptions> openRouterOptions,
+        IOptions<AvalAiOptions> scriptOptions,
+        ILogger<OpenRouterPodcastScriptGenerator> logger)
     {
         _httpClient = httpClient;
-        _options = options.Value;
+        _openRouterOptions = openRouterOptions.Value;
+        _scriptOptions = scriptOptions.Value;
         _logger = logger;
-        _httpClient.BaseAddress = new Uri(_options.BaseUrl.TrimEnd('/') + "/");
+        _httpClient.BaseAddress = new Uri(_openRouterOptions.BaseUrl.TrimEnd('/') + "/");
         _httpClient.Timeout = TimeSpan.FromMinutes(5);
     }
 
@@ -40,11 +44,11 @@ public sealed class AvalAiPodcastScriptGenerator : IPodcastScriptGenerator
         int targetMinutes,
         CancellationToken cancellationToken)
     {
-        EnsureApiKeyConfigured();
+        EnsureConfigured();
 
         var request = new
         {
-            model = _options.ScriptModel,
+            model = _scriptOptions.ScriptModel,
             temperature = 0.2,
             max_tokens = PodcastScriptPromptBuilder.CalculateMaxCompletionTokens(targetMinutes),
             messages = new[]
@@ -66,17 +70,19 @@ public sealed class AvalAiPodcastScriptGenerator : IPodcastScriptGenerator
 
         for (var attempt = 1; attempt <= 2; attempt++)
         {
-            using var httpRequest = new HttpRequestMessage(HttpMethod.Post, "v1/chat/completions")
+            using var httpRequest = new HttpRequestMessage(HttpMethod.Post, "chat/completions")
             {
                 Content = JsonContent.Create(request, options: JsonOptions)
             };
-            httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _options.ApiKey);
+            httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _openRouterOptions.ApiKey);
+            AddOptionalHeader(httpRequest, "HTTP-Referer", _openRouterOptions.Referer);
+            AddOptionalHeader(httpRequest, "X-Title", _openRouterOptions.Title);
 
             try
             {
                 _logger.LogInformation(
-                    "Generating podcast script with AvalAI model {Model}. Attempt={Attempt}",
-                    _options.ScriptModel,
+                    "Generating podcast script with OpenRouter model {Model}. Attempt={Attempt}",
+                    _scriptOptions.ScriptModel,
                     attempt);
 
                 using var response = await _httpClient.SendAsync(httpRequest, cancellationToken);
@@ -85,49 +91,40 @@ public sealed class AvalAiPodcastScriptGenerator : IPodcastScriptGenerator
 
                 if (!response.IsSuccessStatusCode)
                 {
-                    AvalAiHttpErrors.ThrowIfQuotaExhausted("script generation", statusCode, responseBody);
+                    var failure = $"HTTP {statusCode}. Body: {responseBody}";
+                    failures.Add(failure);
 
-                    failures.Add($"HTTP {statusCode}.");
-
-                    if (statusCode >= 500 && attempt < 2)
+                    if ((statusCode >= 500 || statusCode == 429) && attempt < 2)
                     {
-                        _logger.LogWarning(
-                            "AvalAI script generation failed transiently: HTTP {StatusCode}",
-                            statusCode);
+                        _logger.LogWarning("OpenRouter script generation failed transiently: {Failure}", failure);
                         continue;
                     }
 
-                    throw AvalAiHttpErrors.CreateHttpFailureException(
-                        "AvalAI script generation",
-                        "script generation",
-                        statusCode,
-                        responseBody,
-                        failures);
+                    throw new InvalidOperationException(
+                        $"OpenRouter script generation failed. {string.Join(Environment.NewLine, failures)}");
                 }
 
                 var completion = JsonSerializer.Deserialize<ChatCompletionResponse>(responseBody, JsonOptions)
-                    ?? throw new InvalidOperationException("AvalAI script generation returned an empty response.");
+                    ?? throw new InvalidOperationException("OpenRouter script generation returned an empty response.");
 
                 var script = completion.Choices.FirstOrDefault()?.Message.Content;
                 if (string.IsNullOrWhiteSpace(script))
                 {
-                    throw new InvalidOperationException("AvalAI script generation returned no message content.");
+                    throw new InvalidOperationException("OpenRouter script generation returned no message content.");
                 }
 
                 var tokenUsage = completion.Usage?.ToTokenUsage();
-                var estimatedCost = AvalAiCostParser.TryParseEstimatedCost(responseBody)
-                    ?? AvalAiPricingEstimator.EstimateScriptCost(_options.ScriptModel, tokenUsage);
-
+                var estimatedCost = AvalAiCostParser.TryParseOpenRouterUsageCost(responseBody);
                 if (estimatedCost is not null)
                 {
                     _logger.LogInformation(
-                        "AvalAI script cost: {CostSummary}",
+                        "OpenRouter script cost: {CostSummary}",
                         GenerationCostFormatter.Format(estimatedCost, "Script"));
                 }
 
                 return new ScriptGenerationResult(
                     script.Trim(),
-                    _options.ScriptModel,
+                    completion.Model ?? _scriptOptions.ScriptModel,
                     tokenUsage,
                     estimatedCost);
             }
@@ -135,46 +132,60 @@ public sealed class AvalAiPodcastScriptGenerator : IPodcastScriptGenerator
             {
                 var failure = $"timeout on attempt {attempt}. Retrying once.";
                 failures.Add(failure);
-                _logger.LogWarning("AvalAI script generation {Failure}", failure);
+                _logger.LogWarning("OpenRouter script generation {Failure}", failure);
             }
             catch (HttpRequestException ex) when (attempt < 2)
             {
                 var failure = $"transport error on attempt {attempt}: {ex.Message}. Retrying once.";
                 failures.Add(failure);
-                _logger.LogWarning("AvalAI script generation {Failure}", failure);
+                _logger.LogWarning("OpenRouter script generation {Failure}", failure);
             }
         }
 
         throw new InvalidOperationException(
-            $"AvalAI script generation failed. {string.Join(Environment.NewLine, failures)}");
+            $"OpenRouter script generation failed. {string.Join(Environment.NewLine, failures)}");
     }
 
-    private void EnsureApiKeyConfigured()
+    private static void AddOptionalHeader(HttpRequestMessage request, string name, string value)
     {
-        if (string.IsNullOrWhiteSpace(_options.ApiKey))
+        if (!string.IsNullOrWhiteSpace(value))
         {
-            throw new InvalidOperationException(
-                "AvalAI API key is missing. Set AvalAi:ApiKey in appsettings.json, AvalAi__ApiKey, or AVALAI_API_KEY.");
+            request.Headers.TryAddWithoutValidation(name, value);
         }
     }
 
-    public sealed class ChatCompletionResponse
+    private void EnsureConfigured()
     {
+        if (string.IsNullOrWhiteSpace(_openRouterOptions.ApiKey))
+        {
+            throw new InvalidOperationException(
+                "OpenRouter API key is missing. Set OpenRouter:ApiKey, OpenRouter__ApiKey, or OPENROUTER_API_KEY.");
+        }
+
+        if (string.IsNullOrWhiteSpace(_scriptOptions.ScriptModel))
+        {
+            throw new InvalidOperationException("Script model is missing.");
+        }
+    }
+
+    private sealed class ChatCompletionResponse
+    {
+        public string? Model { get; set; }
         public List<ChatChoice> Choices { get; set; } = [];
         public UsageDto? Usage { get; set; }
     }
 
-    public sealed class ChatChoice
+    private sealed class ChatChoice
     {
         public ChatMessage Message { get; set; } = new();
     }
 
-    public sealed class ChatMessage
+    private sealed class ChatMessage
     {
         public string Content { get; set; } = string.Empty;
     }
 
-    public sealed class UsageDto
+    private sealed class UsageDto
     {
         [JsonPropertyName("prompt_tokens")]
         public int? PromptTokens { get; set; }

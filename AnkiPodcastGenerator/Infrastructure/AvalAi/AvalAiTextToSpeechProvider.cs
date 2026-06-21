@@ -4,6 +4,7 @@ using System.Text.Json;
 using AnkiPodcastGenerator.Configuration;
 using AnkiPodcastGenerator.Core.Interfaces;
 using AnkiPodcastGenerator.Core.Models;
+using AnkiPodcastGenerator.Core.Services;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -76,7 +77,9 @@ public sealed class AvalAiTextToSpeechProvider : ITextToSpeechProvider
                     if (!response.IsSuccessStatusCode)
                     {
                         var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
-                        var failure = $"model '{model}' failed with HTTP {statusCode}. Body: {responseBody}";
+                        AvalAiHttpErrors.ThrowIfQuotaExhausted("text-to-speech", statusCode, responseBody);
+
+                        var failure = $"model '{model}' failed with HTTP {statusCode}.";
                         failures.Add(failure);
                         _logger.LogWarning("AvalAI TTS {Failure}", failure);
 
@@ -114,7 +117,18 @@ public sealed class AvalAiTextToSpeechProvider : ITextToSpeechProvider
                         audioBytes.Length);
 
                     _lastSuccessfulModel = model;
-                    return new TextToSpeechResult(model, voice, outputPath, audioBytes.Length);
+                    var estimatedCost = AvalAiPricingEstimator.EstimateTtsCostFromAudioSeconds(
+                        model,
+                        AvalAiPricingEstimator.EstimateMp3DurationSeconds(audioBytes.Length));
+
+                    if (estimatedCost is not null)
+                    {
+                        _logger.LogInformation(
+                            "AvalAI TTS cost: {CostSummary}",
+                            GenerationCostFormatter.Format(estimatedCost, "TTS"));
+                    }
+
+                    return new TextToSpeechResult(model, voice, outputPath, audioBytes.Length, estimatedCost);
                 }
                 catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
                 {
@@ -143,6 +157,11 @@ public sealed class AvalAiTextToSpeechProvider : ITextToSpeechProvider
                     }
                 }
             }
+        }
+
+        if (AvalAiHttpErrors.TryCreateFromFailureDetails("text-to-speech", failures) is { } quotaFailure)
+        {
+            throw quotaFailure;
         }
 
         throw new InvalidOperationException("AvalAI TTS failed. " + string.Join(Environment.NewLine, failures));

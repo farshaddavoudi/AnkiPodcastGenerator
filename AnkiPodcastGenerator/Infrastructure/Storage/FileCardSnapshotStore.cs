@@ -8,6 +8,7 @@ public sealed class FileCardSnapshotStore : ICardSnapshotStore
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
+        PropertyNameCaseInsensitive = true,
         WriteIndented = true
     };
 
@@ -16,5 +17,31 @@ public sealed class FileCardSnapshotStore : ICardSnapshotStore
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
         await using var stream = File.Create(outputPath);
         await JsonSerializer.SerializeAsync(stream, snapshot, JsonOptions, cancellationToken);
+    }
+
+    public async Task<CardSnapshot?> LoadAsync(string inputPath, CancellationToken cancellationToken)
+    {
+        if (!File.Exists(inputPath))
+        {
+            return null;
+        }
+
+        try
+        {
+            await using var stream = File.OpenRead(inputPath);
+            return await JsonSerializer.DeserializeAsync<CardSnapshot>(stream, JsonOptions, cancellationToken);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 }

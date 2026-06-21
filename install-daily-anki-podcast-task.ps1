@@ -2,7 +2,6 @@
 param(
     [string]$TaskName = "Anki Podcast Generator Daily",
     [string]$At = "10:00",
-    [Alias("Profiles")]
     [string[]]$Decks = @(),
     [string]$OutputFolder = "C:\Users\fdavo\OneDrive\AnkiPodcasts",
     [string]$AnkiConnectUrl = "http://127.0.0.1:8765",
@@ -19,6 +18,46 @@ $RunnerPath = Join-Path $ProjectRoot "run-daily-anki-podcasts.ps1"
 if (-not (Test-Path -LiteralPath $RunnerPath)) {
     throw "Runner script not found: $RunnerPath"
 }
+
+function Get-ConfiguredDeckNames {
+    $appsettingsPath = Join-Path $ProjectRoot "AnkiPodcastGenerator\appsettings.json"
+    if (-not (Test-Path -LiteralPath $appsettingsPath)) {
+        throw "appsettings.json not found: $appsettingsPath"
+    }
+
+    $config = Get-Content -LiteralPath $appsettingsPath -Raw | ConvertFrom-Json
+    return @($config.Decks | ForEach-Object { $_.DeckName })
+}
+
+function Assert-ConfiguredDecks {
+    param(
+        [string[]]$RequestedDecks,
+        [string[]]$ConfiguredDecks
+    )
+
+    if ($RequestedDecks.Count -eq 0) {
+        return
+    }
+
+    $configuredLookup = @{}
+    foreach ($deck in $ConfiguredDecks) {
+        $configuredLookup[$deck.ToLowerInvariant()] = $deck
+    }
+
+    $unknown = @()
+    foreach ($requested in $RequestedDecks) {
+        if (-not $configuredLookup.ContainsKey($requested.ToLowerInvariant())) {
+            $unknown += $requested
+        }
+    }
+
+    if ($unknown.Count -gt 0) {
+        throw "Unknown deck name(s): $($unknown -join ', '). Use exact DeckName values from appsettings.json. Configured decks: $($ConfiguredDecks -join ', ')"
+    }
+}
+
+$configuredDecks = Get-ConfiguredDeckNames
+Assert-ConfiguredDecks -RequestedDecks $Decks -ConfiguredDecks $configuredDecks
 
 if ([string]::IsNullOrWhiteSpace($env:AVALAI_API_KEY) -and
     [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable("AVALAI_API_KEY", "User"))) {
@@ -86,7 +125,7 @@ Register-ScheduledTask `
     -Trigger $trigger `
     -Settings $settings `
     -Principal $principal `
-    -Description "Generates Anki due-card podcasts into OneDrive." `
+    -Description "Generates Anki due-card podcasts for every deck listed in appsettings.json." `
     -Force | Out-Null
 
 Write-Host "Installed scheduled task '$TaskName'."
@@ -99,7 +138,7 @@ if ($Decks.Count -gt 0) {
     Write-Host "Decks: $($Decks -join ', ')"
 }
 else {
-    Write-Host "Decks: all configured"
+    Write-Host "Decks: all configured in appsettings.json ($($configuredDecks -join ', '))"
 }
 
 if ($RunNow) {

@@ -4,4 +4,5 @@ public sealed record TextToSpeechResult(
     string Model,
     string Voice,
     string OutputPath,
-    long BytesWritten);
+    long BytesWritten,
+    ApiCostEstimate? EstimatedCost = null);

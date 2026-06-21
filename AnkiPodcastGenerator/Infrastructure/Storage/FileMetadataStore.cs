@@ -12,52 +12,64 @@ public sealed class FileMetadataStore : IMetadataStore
         WriteIndented = true
     };
 
-    public async Task<GeneratedPodcastMetadata?> LoadAsync(OutputPaths outputPaths, CancellationToken cancellationToken)
+    public async Task<GeneratedPodcastMetadata?> FindReusableAsync(
+        OutputPaths outputPaths,
+        string cardHash,
+        string generationSettingsHash,
+        CancellationToken cancellationToken)
     {
-        if (File.Exists(outputPaths.MetadataPath))
-        {
-            await using var stream = File.OpenRead(outputPaths.MetadataPath);
-            return await JsonSerializer.DeserializeAsync<GeneratedPodcastMetadata>(stream, JsonOptions, cancellationToken);
-        }
-
-        if (!Directory.Exists(outputPaths.OutputFolder))
-        {
-            return null;
-        }
-
-        foreach (var metadataPath in FindCandidateMetadataFiles(outputPaths))
+        foreach (var metadataPath in EnumerateCandidateMetadataPaths(outputPaths))
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            GeneratedPodcastMetadata? metadata;
-            try
-            {
-                await using var stream = File.OpenRead(metadataPath);
-                metadata = await JsonSerializer.DeserializeAsync<GeneratedPodcastMetadata>(stream, JsonOptions, cancellationToken);
-            }
-            catch (JsonException)
-            {
-                continue;
-            }
-            catch (IOException)
-            {
-                continue;
-            }
-            catch (UnauthorizedAccessException)
-            {
-                continue;
-            }
-
+            var metadata = await TryReadMetadataAsync(metadataPath, cancellationToken);
             if (metadata is null)
             {
                 continue;
             }
 
-            var metadataSlug = string.IsNullOrWhiteSpace(metadata.DeckSlug)
-                ? metadata.ProfileSlug
-                : metadata.DeckSlug;
+            if (!MatchesDeckSlug(metadata, outputPaths.DeckSlug))
+            {
+                continue;
+            }
 
-            if (!string.Equals(metadataSlug, outputPaths.DeckSlug, StringComparison.OrdinalIgnoreCase))
+            if (!HashesMatch(metadata, cardHash, generationSettingsHash))
+            {
+                continue;
+            }
+
+            if (!File.Exists(metadata.Mp3Path))
+            {
+                continue;
+            }
+
+            return metadata;
+        }
+
+        return null;
+    }
+
+    public async Task<GeneratedPodcastMetadata?> FindLatestAsync(
+        OutputPaths outputPaths,
+        string generationSettingsHash,
+        CancellationToken cancellationToken)
+    {
+        foreach (var metadataPath in EnumerateCandidateMetadataPaths(outputPaths))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var metadata = await TryReadMetadataAsync(metadataPath, cancellationToken);
+            if (metadata is null)
+            {
+                continue;
+            }
+
+            if (!MatchesDeckSlug(metadata, outputPaths.DeckSlug))
+            {
+                continue;
+            }
+
+            if (!string.Equals(metadata.GenerationSettingsHash, generationSettingsHash, StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
@@ -80,7 +92,23 @@ public sealed class FileMetadataStore : IMetadataStore
         await JsonSerializer.SerializeAsync(stream, metadata, JsonOptions, cancellationToken);
     }
 
-    private static IEnumerable<string> FindCandidateMetadataFiles(OutputPaths outputPaths)
+    private static IEnumerable<string> EnumerateCandidateMetadataPaths(OutputPaths outputPaths)
+    {
+        var candidates = new List<string>();
+
+        if (File.Exists(outputPaths.MetadataPath))
+        {
+            candidates.Add(outputPaths.MetadataPath);
+        }
+
+        candidates.AddRange(FindOtherCandidateMetadataFiles(outputPaths));
+
+        return candidates
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderByDescending(File.GetLastWriteTimeUtc);
+    }
+
+    private static IEnumerable<string> FindOtherCandidateMetadataFiles(OutputPaths outputPaths)
     {
         var candidates = new List<string>();
         var legacyMetadataPath = Path.Combine(outputPaths.OutputFolder, outputPaths.DeckSlug, "generated.json");
@@ -94,8 +122,7 @@ public sealed class FileMetadataStore : IMetadataStore
             var datedMetadataPaths = Directory
                 .EnumerateDirectories(outputPaths.OutputFolder)
                 .Select(directory => Path.Combine(directory, "_metadata", outputPaths.DeckSlug, "generated.json"))
-                .Where(File.Exists)
-                .OrderByDescending(File.GetLastWriteTimeUtc);
+                .Where(File.Exists);
 
             candidates.AddRange(datedMetadataPaths);
         }
@@ -108,9 +135,47 @@ public sealed class FileMetadataStore : IMetadataStore
 
         return candidates
             .Where(path => !SamePath(path, outputPaths.MetadataPath))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
     }
+
+    private static async Task<GeneratedPodcastMetadata?> TryReadMetadataAsync(
+        string metadataPath,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var stream = File.OpenRead(metadataPath);
+            return await JsonSerializer.DeserializeAsync<GeneratedPodcastMetadata>(stream, JsonOptions, cancellationToken);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    private static bool MatchesDeckSlug(GeneratedPodcastMetadata metadata, string deckSlug)
+    {
+        var metadataSlug = string.IsNullOrWhiteSpace(metadata.DeckSlug)
+            ? metadata.ProfileSlug
+            : metadata.DeckSlug;
+
+        return string.Equals(metadataSlug, deckSlug, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool HashesMatch(
+        GeneratedPodcastMetadata metadata,
+        string cardHash,
+        string generationSettingsHash) =>
+        string.Equals(metadata.CardHash, cardHash, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(metadata.GenerationSettingsHash, generationSettingsHash, StringComparison.OrdinalIgnoreCase);
 
     private static bool SamePath(string left, string right) =>
         string.Equals(Path.GetFullPath(left), Path.GetFullPath(right), StringComparison.OrdinalIgnoreCase);

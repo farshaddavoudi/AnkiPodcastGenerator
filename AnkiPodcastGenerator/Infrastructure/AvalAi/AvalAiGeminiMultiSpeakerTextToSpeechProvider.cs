@@ -4,6 +4,7 @@ using System.Text.Json;
 using AnkiPodcastGenerator.Configuration;
 using AnkiPodcastGenerator.Core.Interfaces;
 using AnkiPodcastGenerator.Core.Models;
+using AnkiPodcastGenerator.Core.Services;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -66,11 +67,19 @@ public sealed class AvalAiGeminiMultiSpeakerTextToSpeechProvider : IMultiSpeaker
         {
             var chunkFiles = new List<string>(chunks.Count);
             var modelsUsed = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+            ApiCostEstimate? totalCost = null;
 
             for (var i = 0; i < chunks.Count; i++)
             {
-                var transcript = RenderTranscript(chunks[i]);
                 var chunkFile = Path.Combine(tempDirectory, $"{i + 1:000}-native.mp3");
+                if (TryGetPauseChunkSeconds(chunks[i], out var pauseSeconds))
+                {
+                    await _audioCombiner.CreateSilenceMp3Async(pauseSeconds, chunkFile, cancellationToken);
+                    chunkFiles.Add(chunkFile);
+                    continue;
+                }
+
+                var transcript = RenderTranscript(chunks[i]);
                 var result = await GenerateNativeChunkAsync(
                     transcript,
                     voiceA,
@@ -81,6 +90,7 @@ public sealed class AvalAiGeminiMultiSpeakerTextToSpeechProvider : IMultiSpeaker
                     cancellationToken);
 
                 modelsUsed.Add(result.Model);
+                totalCost = totalCost?.Add(result.EstimatedCost) ?? result.EstimatedCost;
                 chunkFiles.Add(chunkFile);
             }
 
@@ -96,7 +106,15 @@ public sealed class AvalAiGeminiMultiSpeakerTextToSpeechProvider : IMultiSpeaker
 
             var fileInfo = new FileInfo(outputPath);
             var modelSummary = modelsUsed.Count == 0 ? _options.TtsModel : string.Join("+", modelsUsed);
-            return new TextToSpeechResult(modelSummary, $"{voiceA}/{voiceB}", outputPath, fileInfo.Length);
+
+            if (totalCost is not null)
+            {
+                _logger.LogInformation(
+                    "AvalAI TTS cost: {CostSummary}",
+                    GenerationCostFormatter.Format(totalCost, "TTS"));
+            }
+
+            return new TextToSpeechResult(modelSummary, $"{voiceA}/{voiceB}", outputPath, fileInfo.Length, totalCost);
         }
         finally
         {
@@ -140,7 +158,9 @@ public sealed class AvalAiGeminiMultiSpeakerTextToSpeechProvider : IMultiSpeaker
 
                     if (!response.IsSuccessStatusCode)
                     {
-                        var failure = $"model '{model}' failed with HTTP {statusCode}. Body: {responseBody}";
+                        AvalAiHttpErrors.ThrowIfQuotaExhausted("multi-speaker text-to-speech", statusCode, responseBody);
+
+                        var failure = $"model '{model}' failed with HTTP {statusCode}.";
                         failures.Add(failure);
                         _logger.LogWarning("AvalAI native Gemini TTS {Failure}", failure);
 
@@ -157,6 +177,11 @@ public sealed class AvalAiGeminiMultiSpeakerTextToSpeechProvider : IMultiSpeaker
                     await WriteAudioAsMp3Async(audio, outputPath, tempDirectory, chunkNumber, cancellationToken);
 
                     var bytesWritten = new FileInfo(outputPath).Length;
+                    var chunkCost = AvalAiCostParser.TryParseEstimatedCost(responseBody)
+                        ?? AvalAiPricingEstimator.EstimateTtsCostFromAudioSeconds(
+                            model,
+                            AvalAiPricingEstimator.EstimateMp3DurationSeconds(bytesWritten));
+
                     _logger.LogInformation(
                         "Saved native Gemini multi-speaker MP3 chunk. Model={Model}, VoiceA={VoiceA}, VoiceB={VoiceB}, MimeType={MimeType}, OutputPath={OutputPath}, Bytes={Bytes}",
                         model,
@@ -167,7 +192,7 @@ public sealed class AvalAiGeminiMultiSpeakerTextToSpeechProvider : IMultiSpeaker
                         bytesWritten);
 
                     _lastSuccessfulModel = model;
-                    return new TextToSpeechResult(model, $"{voiceA}/{voiceB}", outputPath, bytesWritten);
+                    return new TextToSpeechResult(model, $"{voiceA}/{voiceB}", outputPath, bytesWritten, chunkCost);
                 }
                 catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
                 {
@@ -205,6 +230,11 @@ public sealed class AvalAiGeminiMultiSpeakerTextToSpeechProvider : IMultiSpeaker
                     break;
                 }
             }
+        }
+
+        if (AvalAiHttpErrors.TryCreateFromFailureDetails("multi-speaker text-to-speech", failures) is { } quotaFailure)
+        {
+            throw quotaFailure;
         }
 
         throw new InvalidOperationException("AvalAI native Gemini TTS failed. " + string.Join(Environment.NewLine, failures));
@@ -424,6 +454,11 @@ public sealed class AvalAiGeminiMultiSpeakerTextToSpeechProvider : IMultiSpeaker
 
         foreach (var segment in segments)
         {
+            if (segment.PauseAfterSeconds > 0)
+            {
+                continue;
+            }
+
             var speaker = segment.Speaker == 'B' ? "Host B" : "Host A";
             builder.Append(speaker);
             builder.Append(": ");
@@ -443,6 +478,19 @@ public sealed class AvalAiGeminiMultiSpeakerTextToSpeechProvider : IMultiSpeaker
 
         foreach (var segment in ExpandOversizedSegments(segments, maxTranscriptBytes))
         {
+            if (segment.PauseAfterSeconds > 0)
+            {
+                if (current.Count > 0)
+                {
+                    chunks.Add(current.ToArray());
+                    current = [];
+                    currentBytes = 0;
+                }
+
+                chunks.Add(new[] { segment });
+                continue;
+            }
+
             var segmentBytes = GetTranscriptBytes(segment);
             if (current.Count > 0 && currentBytes + segmentBytes > maxTranscriptBytes)
             {
@@ -469,6 +517,12 @@ public sealed class AvalAiGeminiMultiSpeakerTextToSpeechProvider : IMultiSpeaker
     {
         foreach (var segment in segments)
         {
+            if (segment.PauseAfterSeconds > 0)
+            {
+                yield return segment;
+                continue;
+            }
+
             if (GetTranscriptBytes(segment) <= maxTranscriptBytes)
             {
                 yield return segment;
@@ -550,10 +604,27 @@ public sealed class AvalAiGeminiMultiSpeakerTextToSpeechProvider : IMultiSpeaker
 
     private static int GetTranscriptBytes(PodcastSegment segment)
     {
+        if (segment.PauseAfterSeconds > 0)
+        {
+            return 0;
+        }
+
         var speakerBytes = segment.Speaker == 'B'
             ? Encoding.UTF8.GetByteCount("Host B: ")
             : Encoding.UTF8.GetByteCount("Host A: ");
         return speakerBytes + Encoding.UTF8.GetByteCount(segment.Text) + Environment.NewLine.Length;
+    }
+
+    private static bool TryGetPauseChunkSeconds(IReadOnlyList<PodcastSegment> chunk, out int seconds)
+    {
+        if (chunk.Count == 1 && chunk[0].PauseAfterSeconds > 0)
+        {
+            seconds = chunk[0].PauseAfterSeconds;
+            return true;
+        }
+
+        seconds = 0;
+        return false;
     }
 
     private void EnsureConfigured(string voiceA, string voiceB)
