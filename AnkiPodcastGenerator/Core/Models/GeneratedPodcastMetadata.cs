@@ -20,6 +20,9 @@ public sealed class GeneratedPodcastMetadata
     public int CardCount { get; set; }
     public int TargetMinutes { get; set; }
     public int MaxCards { get; set; }
+    public int? CardsPerPodcast { get; set; }
+    public int BundleIndex { get; set; }
+    public int TotalBundles { get; set; }
     public bool MultiSpeaker { get; set; }
     public bool Reused { get; set; }
     public string? ReusedFromMp3Path { get; set; }

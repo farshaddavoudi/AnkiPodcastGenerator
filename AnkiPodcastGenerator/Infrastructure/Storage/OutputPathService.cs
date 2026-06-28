@@ -11,19 +11,41 @@ public sealed class OutputPathService(IOptions<PodcastOptions> options) : IOutpu
 {
     public OutputPaths GetPaths(PodcastDeck deck, DateOnly date)
     {
+        return GetPaths(deck, date, 1, 1);
+    }
+
+    public OutputPaths GetPaths(PodcastDeck deck, DateOnly date, int bundleIndex, int totalBundles)
+    {
         var outputFolder = options.Value.OutputFolder;
         var slug = GetSlug(deck);
         var datePrefix = date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         var dateFolder = Path.Combine(outputFolder, datePrefix);
-        var metadataFolder = Path.Combine(dateFolder, "_metadata", slug);
+
+        string mp3Name;
+        string metadataSubfolder;
+
+        if (totalBundles > 1)
+        {
+            mp3Name = $"{slug}_part{bundleIndex}of{totalBundles}.mp3";
+            metadataSubfolder = Path.Combine(slug, $"bundle_{bundleIndex}");
+        }
+        else
+        {
+            mp3Name = $"{slug}.mp3";
+            metadataSubfolder = slug;
+        }
+
+        var metadataFolder = Path.Combine(dateFolder, "_metadata", metadataSubfolder);
 
         return new OutputPaths(
             outputFolder,
             slug,
             Path.Combine(metadataFolder, "cards.json"),
             Path.Combine(metadataFolder, "script.txt"),
-            Path.Combine(dateFolder, $"{slug}.mp3"),
-            Path.Combine(metadataFolder, "generated.json"));
+            Path.Combine(dateFolder, mp3Name),
+            Path.Combine(metadataFolder, "generated.json"),
+            bundleIndex,
+            totalBundles);
     }
 
     public string GetSlug(PodcastDeck deck)

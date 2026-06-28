@@ -5,4 +5,5 @@ public sealed record PodcastGenerationResult(
     bool Reused,
     int CardCount,
     string? Mp3Path,
-    string Message);
+    string Message,
+    IReadOnlyList<string>? Mp3Paths = null);

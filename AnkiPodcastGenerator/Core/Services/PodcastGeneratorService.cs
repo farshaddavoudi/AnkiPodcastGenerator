@@ -73,7 +73,7 @@ public sealed class PodcastGeneratorService(
         Directory.CreateDirectory(outputPaths.OutputFolder);
 
         logger.LogInformation(
-            "Starting podcast generation for deck {DeckName}. Query={AnkiQuery}, GenerationProfile={GenerationProfile}, ScriptProvider={ScriptProvider}, TtsProvider={TtsProvider}, TargetMinutes={TargetMinutes}, MaxCards={MaxCards}, MultiSpeaker={MultiSpeaker}",
+            "Starting podcast generation for deck {DeckName}. Query={AnkiQuery}, GenerationProfile={GenerationProfile}, ScriptProvider={ScriptProvider}, TtsProvider={TtsProvider}, TargetMinutes={TargetMinutes}, MaxCards={MaxCards}, CardsPerPodcast={CardsPerPodcast}, MultiSpeaker={MultiSpeaker}",
             deck.DeckName,
             ankiQuery,
             string.IsNullOrWhiteSpace(options.GenerationProfile) ? "(none)" : options.GenerationProfile,
@@ -81,6 +81,7 @@ public sealed class PodcastGeneratorService(
             options.TextToSpeechProvider,
             targetMinutes,
             maxCards,
+            deck.CardsPerPodcast,
             multiSpeaker);
 
         var ankiVersion = await ankiConnectClient.GetVersionAsync(cancellationToken);
@@ -113,11 +114,11 @@ public sealed class PodcastGeneratorService(
             return new PodcastGenerationResult(true, false, 0, null, "No cards matched the deck query. No MP3 was generated.");
         }
 
-        var cardHash = cardHashService.ComputeHash(orderedCards);
         var generationSettingsHash = ComputeGenerationSettingsHash(
             ankiQuery,
             targetMinutes,
             maxCards,
+            deck.CardsPerPodcast,
             multiSpeaker,
             options.ScriptProvider,
             options.TextToSpeechProvider,
@@ -128,6 +129,94 @@ public sealed class PodcastGeneratorService(
             avalAi.VoiceA,
             avalAi.VoiceB,
             avalAi.TtsSpeed);
+
+        var cardsPerPodcast = deck.CardsPerPodcast > 0 ? deck.CardsPerPodcast.Value : orderedCards.Length;
+        var totalBundles = Math.Max(1, (int)Math.Ceiling((double)orderedCards.Length / cardsPerPodcast));
+
+        if (totalBundles > 1)
+        {
+            logger.LogInformation(
+                "Splitting {TotalCards} cards into {TotalBundles} bundles of up to {CardsPerPodcast} cards each.",
+                orderedCards.Length,
+                totalBundles,
+                cardsPerPodcast);
+        }
+
+        var generatedPaths = new List<string>();
+        var anySuccess = false;
+        var anyReused = false;
+        var lastMessage = string.Empty;
+        var totalCards = orderedCards.Length;
+
+        for (var bundleIndex = 0; bundleIndex < totalBundles; bundleIndex++)
+        {
+            var bundleCards = orderedCards
+                .Skip(bundleIndex * cardsPerPodcast)
+                .Take(cardsPerPodcast)
+                .ToArray();
+
+            var bundleOutputPaths = outputPathService.GetPaths(deck, today, bundleIndex + 1, totalBundles);
+
+            var bundleTargetMinutes = totalBundles > 1
+                ? Math.Max(1, (int)Math.Round(targetMinutes * (double)bundleCards.Length / orderedCards.Length))
+                : targetMinutes;
+
+            var bundleResult = await GenerateFromCardsAsync(
+                deck,
+                bundleOutputPaths,
+                ankiQuery,
+                bundleCards,
+                bundleTargetMinutes,
+                multiSpeaker,
+                generationSettingsHash,
+                stopwatch,
+                cancellationToken);
+
+            if (bundleResult.Success) anySuccess = true;
+            if (bundleResult.Reused) anyReused = true;
+            if (bundleResult.Mp3Path is not null) generatedPaths.Add(bundleResult.Mp3Path);
+            lastMessage = bundleResult.Message;
+
+            logger.LogInformation("Output file: {OutputFile}", bundleOutputPaths.Mp3Path);
+        }
+
+        stopwatch.Stop();
+        logger.LogInformation("Generation duration: {ElapsedSeconds:N2}s", stopwatch.Elapsed.TotalSeconds);
+
+        return new PodcastGenerationResult(
+            anySuccess,
+            anyReused,
+            totalCards,
+            generatedPaths.FirstOrDefault(),
+            lastMessage,
+            generatedPaths.Count > 1 ? generatedPaths : null);
+    }
+
+    private async Task<PodcastGenerationResult> GenerateFromCardsAsync(
+        PodcastDeck deck,
+        OutputPaths outputPaths,
+        string ankiQuery,
+        IReadOnlyList<AnkiCard> bundleCards,
+        int targetMinutes,
+        bool multiSpeaker,
+        string generationSettingsHash,
+        Stopwatch stopwatch,
+        CancellationToken cancellationToken)
+    {
+        var avalAi = avalAiOptions.Value;
+        var options = podcastOptions.Value;
+
+        if (bundleCards.Count == 0)
+        {
+            return new PodcastGenerationResult(true, false, 0, null, "No cards in this bundle.");
+        }
+
+        var snapshot = new CardSnapshot(deck.DeckName, ankiQuery, DateTimeOffset.UtcNow, bundleCards);
+        await cardSnapshotStore.SaveAsync(snapshot, outputPaths.CardsJsonPath, cancellationToken);
+        logger.LogInformation("Saved cards JSON to {CardsJsonPath}", outputPaths.CardsJsonPath);
+
+        var cardHash = cardHashService.ComputeHash(bundleCards);
+
         GeneratedPodcastMetadata? previousMetadata = null;
         if (options.ReuseIfSameCards)
         {
@@ -146,11 +235,11 @@ public sealed class PodcastGeneratorService(
                 deck,
                 outputPaths,
                 ankiQuery,
-                orderedCards,
+                bundleCards,
                 cardHash,
                 generationSettingsHash,
                 targetMinutes,
-                maxCards,
+                bundleCards.Count,
                 multiSpeaker,
                 activeGenerationProfile.IsConfigured ? activeGenerationProfile.Name : null,
                 activeGenerationProfile.Slug,
@@ -174,16 +263,14 @@ public sealed class PodcastGeneratorService(
                 previousMetadata.GeneratedAtUtc);
             logger.LogInformation(
                 "Generation cost: $0.00 USD / 0 toman (reused cached MP3; no new API calls)");
-            logger.LogInformation("Output file: {OutputFile}", outputPaths.Mp3Path);
-            logger.LogInformation("Generation duration: {ElapsedSeconds:N2}s", stopwatch.Elapsed.TotalSeconds);
 
-            return new PodcastGenerationResult(true, true, orderedCards.Length, outputPaths.Mp3Path, "Card set unchanged. Reused existing MP3.");
+            return new PodcastGenerationResult(true, true, bundleCards.Count, outputPaths.Mp3Path, "Card set unchanged. Reused existing MP3.");
         }
 
         if (options.ReuseIfSameCards && previousMetadata is not null)
         {
             var incrementalCards = await TryGetIncrementalCardsAsync(
-                orderedCards,
+                bundleCards,
                 previousMetadata,
                 cancellationToken);
 
@@ -193,11 +280,11 @@ public sealed class PodcastGeneratorService(
                     deck,
                     outputPaths,
                     ankiQuery,
-                    orderedCards,
+                    bundleCards,
                     cardHash,
                     generationSettingsHash,
                     targetMinutes,
-                    maxCards,
+                    bundleCards.Count,
                     multiSpeaker,
                     previousMetadata,
                     incrementalCards,
@@ -209,13 +296,15 @@ public sealed class PodcastGeneratorService(
         if (options.ReuseIfSameCards)
         {
             logger.LogInformation(
-                "No reusable podcast found for deck {DeckName}. Selected {SelectedCardCount} due cards with hash {CardHash}. Generating new audio.",
+                "No reusable podcast found for deck {DeckName} bundle {BundleIndex} of {TotalBundles}. Selected {SelectedCardCount} due cards with hash {CardHash}. Generating new audio.",
                 deck.DeckName,
-                orderedCards.Length,
+                outputPaths.BundleIndex,
+                outputPaths.TotalBundles,
+                bundleCards.Count,
                 cardHash);
         }
 
-        var scriptResult = await scriptGenerator.GenerateScriptAsync(orderedCards, deck, targetMinutes, cancellationToken);
+        var scriptResult = await scriptGenerator.GenerateScriptAsync(bundleCards, deck, targetMinutes, cancellationToken);
         await WriteTextFileAsync(outputPaths.ScriptPath, scriptResult.Script, cancellationToken);
         logger.LogInformation("Saved script to {ScriptPath}", outputPaths.ScriptPath);
 
@@ -229,7 +318,6 @@ public sealed class PodcastGeneratorService(
         }
 
         var ttsResult = await GenerateAudioAsync(scriptResult.Script, multiSpeaker, outputPaths.Mp3Path, cancellationToken);
-        stopwatch.Stop();
 
         var totalCost = ApiCostEstimate.TryCombine(scriptResult.EstimatedCost, ttsResult.EstimatedCost);
         logger.LogInformation(
@@ -240,11 +328,11 @@ public sealed class PodcastGeneratorService(
             deck,
             outputPaths,
             ankiQuery,
-            orderedCards,
+            bundleCards,
             cardHash,
             generationSettingsHash,
             targetMinutes,
-            maxCards,
+            bundleCards.Count,
             multiSpeaker,
             activeGenerationProfile.IsConfigured ? activeGenerationProfile.Name : null,
             activeGenerationProfile.Slug,
@@ -262,10 +350,7 @@ public sealed class PodcastGeneratorService(
 
         await metadataStore.SaveAsync(outputPaths, metadata, cancellationToken);
 
-        logger.LogInformation("Output file: {OutputFile}", outputPaths.Mp3Path);
-        logger.LogInformation("Generation duration: {ElapsedSeconds:N2}s", stopwatch.Elapsed.TotalSeconds);
-
-        return new PodcastGenerationResult(true, false, orderedCards.Length, outputPaths.Mp3Path, "Generated podcast MP3.");
+        return new PodcastGenerationResult(true, false, bundleCards.Count, outputPaths.Mp3Path, "Generated podcast MP3.");
     }
 
     private async Task<PodcastGenerationResult> ExtendPreviousPodcastAsync(
@@ -591,6 +676,9 @@ public sealed class PodcastGeneratorService(
             CardCount = cards.Count,
             TargetMinutes = targetMinutes,
             MaxCards = maxCards,
+            CardsPerPodcast = deck.CardsPerPodcast,
+            BundleIndex = outputPaths.BundleIndex,
+            TotalBundles = outputPaths.TotalBundles,
             MultiSpeaker = multiSpeaker,
             Reused = false,
             CardsJsonPath = outputPaths.CardsJsonPath,
@@ -650,6 +738,7 @@ public sealed class PodcastGeneratorService(
         string ankiQuery,
         int targetMinutes,
         int maxCards,
+        int? cardsPerPodcast,
         bool multiSpeaker,
         string scriptProvider,
         string textToSpeechProvider,
@@ -668,6 +757,7 @@ public sealed class PodcastGeneratorService(
             ankiQuery,
             targetMinutes,
             maxCards,
+            cardsPerPodcast?.ToString() ?? string.Empty,
             multiSpeaker,
             scriptProvider,
             textToSpeechProvider,

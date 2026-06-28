@@ -46,6 +46,11 @@ public sealed class DeckProvider : IDeckProvider
                 throw new InvalidOperationException($"Deck '{deck.DeckName}' must set MaxCards to a positive integer.");
             }
 
+            if (deck.CardsPerPodcast is <= 0)
+            {
+                throw new InvalidOperationException($"Deck '{deck.DeckName}' must set CardsPerPodcast to a positive integer when provided.");
+            }
+
             if (deck.TargetMinutes is <= 0)
             {
                 throw new InvalidOperationException($"Deck '{deck.DeckName}' must set TargetMinutes to a positive integer when provided.");

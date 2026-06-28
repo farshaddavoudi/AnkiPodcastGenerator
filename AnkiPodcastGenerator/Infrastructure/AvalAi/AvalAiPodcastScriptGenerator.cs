@@ -20,15 +20,18 @@ public sealed class AvalAiPodcastScriptGenerator : IPodcastScriptGenerator
 
     private readonly HttpClient _httpClient;
     private readonly AvalAiOptions _options;
+    private readonly PodcastOptions _podcastOptions;
     private readonly ILogger<AvalAiPodcastScriptGenerator> _logger;
 
     public AvalAiPodcastScriptGenerator(
         HttpClient httpClient,
         IOptions<AvalAiOptions> options,
+        IOptions<PodcastOptions> podcastOptions,
         ILogger<AvalAiPodcastScriptGenerator> logger)
     {
         _httpClient = httpClient;
         _options = options.Value;
+        _podcastOptions = podcastOptions.Value;
         _logger = logger;
         _httpClient.BaseAddress = new Uri(_options.BaseUrl.TrimEnd('/') + "/");
         _httpClient.Timeout = TimeSpan.FromMinutes(5);
@@ -57,7 +60,7 @@ public sealed class AvalAiPodcastScriptGenerator : IPodcastScriptGenerator
                 new
                 {
                     role = "user",
-                    content = PodcastScriptPromptBuilder.BuildUserPrompt(cards, deck, targetMinutes)
+                    content = PodcastScriptPromptBuilder.BuildUserPrompt(cards, deck, targetMinutes, _podcastOptions.CustomPrompt)
                 }
             }
         };

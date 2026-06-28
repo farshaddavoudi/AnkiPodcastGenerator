@@ -22,17 +22,20 @@ public sealed class OpenRouterPodcastScriptGenerator : IPodcastScriptGenerator
     private readonly HttpClient _httpClient;
     private readonly OpenRouterOptions _openRouterOptions;
     private readonly AvalAiOptions _scriptOptions;
+    private readonly PodcastOptions _podcastOptions;
     private readonly ILogger<OpenRouterPodcastScriptGenerator> _logger;
 
     public OpenRouterPodcastScriptGenerator(
         HttpClient httpClient,
         IOptions<OpenRouterOptions> openRouterOptions,
         IOptions<AvalAiOptions> scriptOptions,
+        IOptions<PodcastOptions> podcastOptions,
         ILogger<OpenRouterPodcastScriptGenerator> logger)
     {
         _httpClient = httpClient;
         _openRouterOptions = openRouterOptions.Value;
         _scriptOptions = scriptOptions.Value;
+        _podcastOptions = podcastOptions.Value;
         _logger = logger;
         _httpClient.BaseAddress = new Uri(_openRouterOptions.BaseUrl.TrimEnd('/') + "/");
         _httpClient.Timeout = TimeSpan.FromMinutes(5);
@@ -61,7 +64,7 @@ public sealed class OpenRouterPodcastScriptGenerator : IPodcastScriptGenerator
                 new
                 {
                     role = "user",
-                    content = PodcastScriptPromptBuilder.BuildUserPrompt(cards, deck, targetMinutes)
+                    content = PodcastScriptPromptBuilder.BuildUserPrompt(cards, deck, targetMinutes, _podcastOptions.CustomPrompt)
                 }
             }
         };

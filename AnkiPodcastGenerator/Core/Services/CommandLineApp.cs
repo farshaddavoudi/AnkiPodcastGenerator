@@ -71,7 +71,13 @@ public sealed class CommandLineApp(
 
         foreach (var deck in deckProvider.GetAllDecks())
         {
-            Console.WriteLine($"  {deck.DeckName} (MaxCards={deck.MaxCards})");
+            var details = $"MaxCards={deck.MaxCards}";
+            if (deck.CardsPerPodcast is > 0)
+            {
+                details += $", CardsPerPodcast={deck.CardsPerPodcast}";
+            }
+
+            Console.WriteLine($"  {deck.DeckName} ({details})");
         }
     }
 
@@ -80,7 +86,14 @@ public sealed class CommandLineApp(
         var result = await podcastGenerator.GenerateAsync(deckName, cancellationToken);
         Console.WriteLine(result.Message);
 
-        if (!string.IsNullOrWhiteSpace(result.Mp3Path))
+        if (result.Mp3Paths is { Count: > 0 })
+        {
+            foreach (var path in result.Mp3Paths)
+            {
+                Console.WriteLine(path);
+            }
+        }
+        else if (!string.IsNullOrWhiteSpace(result.Mp3Path))
         {
             Console.WriteLine(result.Mp3Path);
         }
@@ -107,7 +120,14 @@ public sealed class CommandLineApp(
                 var result = await podcastGenerator.GenerateAsync(deck.DeckName, cancellationToken);
                 Console.WriteLine(result.Message);
 
-                if (!string.IsNullOrWhiteSpace(result.Mp3Path))
+                if (result.Mp3Paths is { Count: > 0 })
+                {
+                    foreach (var path in result.Mp3Paths)
+                    {
+                        Console.WriteLine(path);
+                    }
+                }
+                else if (!string.IsNullOrWhiteSpace(result.Mp3Path))
                 {
                     Console.WriteLine(result.Mp3Path);
                 }

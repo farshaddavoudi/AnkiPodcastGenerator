@@ -39,7 +39,7 @@ public static class PodcastScriptPromptBuilder
         Spend more time on complex cards and less time on simple cards.
         """;
 
-    public static string BuildUserPrompt(IReadOnlyList<AnkiCard> cards, PodcastDeck deck, int targetMinutes)
+    public static string BuildUserPrompt(IReadOnlyList<AnkiCard> cards, PodcastDeck deck, int targetMinutes, string? globalCustomPrompt = null)
     {
         var compactCards = cards.Select((card, index) => new
         {
@@ -53,11 +53,22 @@ public static class PodcastScriptPromptBuilder
 
         var cardsJson = JsonSerializer.Serialize(compactCards, JsonOptions);
 
+        var customPromptPrefix = string.Empty;
+        if (!string.IsNullOrWhiteSpace(globalCustomPrompt))
+        {
+            customPromptPrefix += $"IMPORTANT INSTRUCTIONS FOR ALL DECKS:\n{globalCustomPrompt}\n\n";
+        }
+
+        if (!string.IsNullOrWhiteSpace(deck.CustomPrompt))
+        {
+            customPromptPrefix += $"IMPORTANT INSTRUCTIONS FOR THIS DECK:\n{deck.CustomPrompt}\n\n";
+        }
+
         return $$"""
         Create a two-host podcast script for Anki deck "{{deck.DeckName}}".
         Target duration: about {{targetMinutes}} minutes.
 
-        Requirements:
+        {{customPromptPrefix}}Requirements:
         - Use [A] and [B] speaker markers exactly.
         - Host A explains as a senior engineer.
         - Host B asks practical interviewer questions and checks understanding.
