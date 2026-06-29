@@ -8,6 +8,7 @@ param(
     [string]$KokoroWorkingDirectory = "C:\Tools\kokoro-tts",
     [int]$AnkiConnectTimeoutSeconds = 120,
     [switch]$DoNotStartAnki,
+    [switch]$KeepWindowOpenOnError,
     [switch]$RunNow
 )
 
@@ -20,13 +21,72 @@ if (-not (Test-Path -LiteralPath $RunnerPath)) {
     throw "Runner script not found: $RunnerPath"
 }
 
-function Get-ConfiguredDeckNames {
+function Remove-JsonLineComments {
+    param([string]$Json)
+
+    $builder = [System.Text.StringBuilder]::new()
+    $inString = $false
+    $escaped = $false
+
+    for ($index = 0; $index -lt $Json.Length; $index++) {
+        $ch = $Json[$index]
+
+        if ($inString) {
+            [void]$builder.Append($ch)
+
+            if ($escaped) {
+                $escaped = $false
+            }
+            elseif ($ch -eq [char]'\') {
+                $escaped = $true
+            }
+            elseif ($ch -eq [char]'"') {
+                $inString = $false
+            }
+
+            continue
+        }
+
+        if ($ch -eq [char]'"') {
+            $inString = $true
+            [void]$builder.Append($ch)
+            continue
+        }
+
+        if ($ch -eq [char]'/' -and
+            $index + 1 -lt $Json.Length -and
+            $Json[$index + 1] -eq [char]'/') {
+            while ($index -lt $Json.Length -and
+                $Json[$index] -ne [char]"`r" -and
+                $Json[$index] -ne [char]"`n") {
+                $index++
+            }
+
+            if ($index -lt $Json.Length) {
+                [void]$builder.Append($Json[$index])
+            }
+
+            continue
+        }
+
+        [void]$builder.Append($ch)
+    }
+
+    return $builder.ToString()
+}
+
+function Read-AppSettings {
     $appsettingsPath = Join-Path $ProjectRoot "AnkiPodcastGenerator\appsettings.json"
     if (-not (Test-Path -LiteralPath $appsettingsPath)) {
         throw "appsettings.json not found: $appsettingsPath"
     }
 
-    $config = Get-Content -LiteralPath $appsettingsPath -Raw | ConvertFrom-Json
+    $json = Get-Content -LiteralPath $appsettingsPath -Raw
+    return Remove-JsonLineComments -Json $json | ConvertFrom-Json
+}
+
+function Get-ConfiguredDeckNames {
+    $config = Read-AppSettings
     return @($config.Decks | ForEach-Object { $_.DeckName })
 }
 
@@ -97,6 +157,10 @@ if ($DoNotStartAnki) {
     $runnerCommand += " -DoNotStartAnki"
 }
 
+if ($KeepWindowOpenOnError) {
+    $runnerCommand += " -KeepWindowOpenOnError"
+}
+
 $encodedRunnerCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($runnerCommand))
 $arguments = @(
     "-NoProfile",
@@ -138,6 +202,10 @@ Write-Host "Output: $OutputFolder"
 Write-Host "AnkiConnect URL: $AnkiConnectUrl"
 Write-Host "Kokoro working directory: $KokoroWorkingDirectory"
 Write-Host "AnkiConnect timeout: $AnkiConnectTimeoutSeconds seconds"
+Write-Host "Latest run log: $(Join-Path $ProjectRoot 'logs\daily-run-latest.log')"
+if ($KeepWindowOpenOnError) {
+    Write-Host "Debug mode: scheduled task window will stay open on runner errors."
+}
 if ($Decks.Count -gt 0) {
     Write-Host "Decks: $($Decks -join ', ')"
 }

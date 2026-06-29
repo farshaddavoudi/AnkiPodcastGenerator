@@ -5,7 +5,8 @@ param(
     [string]$AnkiConnectUrl = "http://127.0.0.1:8765",
     [string]$KokoroWorkingDirectory = "C:\Tools\kokoro-tts",
     [int]$AnkiConnectTimeoutSeconds = 120,
-    [switch]$DoNotStartAnki
+    [switch]$DoNotStartAnki,
+    [switch]$KeepWindowOpenOnError
 )
 
 $ErrorActionPreference = "Stop"
@@ -14,27 +15,87 @@ $ProjectRoot = $PSScriptRoot
 $ProjectFile = Join-Path $ProjectRoot "AnkiPodcastGenerator\AnkiPodcastGenerator.csproj"
 $LogDirectory = Join-Path $ProjectRoot "logs"
 $RunLogPath = Join-Path $LogDirectory ("daily-run-{0:yyyyMMdd-HHmmss}.log" -f (Get-Date))
+$LatestRunLogPath = Join-Path $LogDirectory "daily-run-latest.log"
 
 New-Item -ItemType Directory -Force -Path $LogDirectory | Out-Null
-New-Item -ItemType Directory -Force -Path $OutputFolder | Out-Null
+if (Test-Path -LiteralPath $LatestRunLogPath) {
+    Clear-Content -LiteralPath $LatestRunLogPath
+}
+else {
+    New-Item -ItemType File -Force -Path $LatestRunLogPath | Out-Null
+}
 
-function Get-ConfiguredDeckNames {
+function Remove-JsonLineComments {
+    param([string]$Json)
+
+    $builder = [System.Text.StringBuilder]::new()
+    $inString = $false
+    $escaped = $false
+
+    for ($index = 0; $index -lt $Json.Length; $index++) {
+        $ch = $Json[$index]
+
+        if ($inString) {
+            [void]$builder.Append($ch)
+
+            if ($escaped) {
+                $escaped = $false
+            }
+            elseif ($ch -eq [char]'\') {
+                $escaped = $true
+            }
+            elseif ($ch -eq [char]'"') {
+                $inString = $false
+            }
+
+            continue
+        }
+
+        if ($ch -eq [char]'"') {
+            $inString = $true
+            [void]$builder.Append($ch)
+            continue
+        }
+
+        if ($ch -eq [char]'/' -and
+            $index + 1 -lt $Json.Length -and
+            $Json[$index + 1] -eq [char]'/') {
+            while ($index -lt $Json.Length -and
+                $Json[$index] -ne [char]"`r" -and
+                $Json[$index] -ne [char]"`n") {
+                $index++
+            }
+
+            if ($index -lt $Json.Length) {
+                [void]$builder.Append($Json[$index])
+            }
+
+            continue
+        }
+
+        [void]$builder.Append($ch)
+    }
+
+    return $builder.ToString()
+}
+
+function Read-AppSettings {
     $appsettingsPath = Join-Path $ProjectRoot "AnkiPodcastGenerator\appsettings.json"
     if (-not (Test-Path -LiteralPath $appsettingsPath)) {
         throw "appsettings.json not found: $appsettingsPath"
     }
 
-    $config = Get-Content -LiteralPath $appsettingsPath -Raw | ConvertFrom-Json
+    $json = Get-Content -LiteralPath $appsettingsPath -Raw
+    return Remove-JsonLineComments -Json $json | ConvertFrom-Json
+}
+
+function Get-ConfiguredDeckNames {
+    $config = Read-AppSettings
     return @($config.Decks | ForEach-Object { $_.DeckName })
 }
 
 function Get-EffectiveTextToSpeechProvider {
-    $appsettingsPath = Join-Path $ProjectRoot "AnkiPodcastGenerator\appsettings.json"
-    if (-not (Test-Path -LiteralPath $appsettingsPath)) {
-        throw "appsettings.json not found: $appsettingsPath"
-    }
-
-    $config = Get-Content -LiteralPath $appsettingsPath -Raw | ConvertFrom-Json
+    $config = Read-AppSettings
     $profileName = [string]$config.Podcast.GenerationProfile
 
     if (-not [string]::IsNullOrWhiteSpace($profileName)) {
@@ -96,7 +157,8 @@ function Write-RunLog {
 
     $line = "[{0:yyyy-MM-dd HH:mm:ss}] {1}" -f (Get-Date), $Message
     Write-Host $line
-    Add-Content -Path $RunLogPath -Value $line -Encoding UTF8
+    Add-Content -LiteralPath $RunLogPath -Value $line -Encoding UTF8
+    Add-Content -LiteralPath $LatestRunLogPath -Value $line -Encoding UTF8
 }
 
 function Write-RunLogError {
@@ -112,6 +174,42 @@ function Write-RunLogError {
 
         Write-RunLog ($Prefix + $line.Trim())
     }
+}
+
+function Wait-ForDebugCloseOnError {
+    if (-not $KeepWindowOpenOnError) {
+        return
+    }
+
+    try {
+        Write-Host ""
+        Write-Host "The scheduled task runner failed. Log file: $RunLogPath"
+        Read-Host "Press Enter to close this window"
+    }
+    catch {
+    }
+}
+
+trap {
+    $errorRecord = $_
+
+    try {
+        Write-RunLog "FATAL: $($errorRecord.Exception.Message)"
+
+        if (-not [string]::IsNullOrWhiteSpace($errorRecord.ScriptStackTrace)) {
+            Write-RunLog "Stack trace:"
+            Write-RunLogError -Prefix "  " -Message $errorRecord.ScriptStackTrace
+        }
+
+        Write-RunLog "Run log: $RunLogPath"
+        Write-RunLog "Latest log: $LatestRunLogPath"
+    }
+    catch {
+        Write-Error $errorRecord
+    }
+
+    Wait-ForDebugCloseOnError
+    exit 1
 }
 
 function Show-AvalAiQuotaAlert {
@@ -342,6 +440,7 @@ function Invoke-AllConfiguredDecks {
 Write-RunLog "Starting daily Anki podcast run."
 Write-RunLog "Project root: $ProjectRoot"
 Write-RunLog "Output folder: $OutputFolder"
+New-Item -ItemType Directory -Force -Path $OutputFolder | Out-Null
 Write-RunLog "AnkiConnect URL: $AnkiConnectUrl"
 $effectiveTtsProvider = Get-EffectiveTextToSpeechProvider
 Write-RunLog "Effective TTS provider: $effectiveTtsProvider"
