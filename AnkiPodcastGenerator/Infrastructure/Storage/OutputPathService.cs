@@ -42,6 +42,8 @@ public sealed class OutputPathService(IOptions<PodcastOptions> options) : IOutpu
             slug,
             Path.Combine(metadataFolder, "cards.json"),
             Path.Combine(metadataFolder, "script.txt"),
+            Path.Combine(metadataFolder, "script-tts-normalized.txt"),
+            Path.Combine(metadataFolder, "pronunciation-map.json"),
             Path.Combine(dateFolder, mp3Name),
             Path.Combine(metadataFolder, "generated.json"),
             bundleIndex,

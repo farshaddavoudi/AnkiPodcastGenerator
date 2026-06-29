@@ -23,6 +23,7 @@ builder.Services.Configure<PodcastOptions>(builder.Configuration.GetSection("Pod
 builder.Services.Configure<AvalAiOptions>(builder.Configuration.GetSection("AvalAi"));
 builder.Services.Configure<KokoroOptions>(builder.Configuration.GetSection("Kokoro"));
 builder.Services.Configure<OpenRouterOptions>(builder.Configuration.GetSection("OpenRouter"));
+builder.Services.Configure<TtsNormalizerOptions>(builder.Configuration.GetSection("TtsNormalizer"));
 
 ActiveGenerationProfile activeGenerationProfile;
 try
@@ -128,6 +129,8 @@ builder.Services.AddSingleton<ICardSnapshotStore, FileCardSnapshotStore>();
 builder.Services.AddSingleton<IMetadataStore, FileMetadataStore>();
 builder.Services.AddSingleton<IPodcastScriptParser, PodcastScriptParser>();
 builder.Services.AddSingleton<IPodcastTtsTextNormalizer, PodcastTtsTextNormalizer>();
+builder.Services.AddSingleton<ITtsScriptNormalizer, TtsScriptNormalizer>();
+builder.Services.AddHttpClient<LlmTtsScriptNormalizer>();
 builder.Services.AddSingleton<IAudioCombiner, FfmpegAudioCombiner>();
 builder.Services.AddSingleton<IPcmAudioEncoder, FfmpegPcmAudioEncoder>();
 builder.Services.AddTransient<IPodcastGeneratorService, PodcastGeneratorService>();

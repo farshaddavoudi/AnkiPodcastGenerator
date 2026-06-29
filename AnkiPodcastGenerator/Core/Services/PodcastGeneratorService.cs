@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using AnkiPodcastGenerator.Configuration;
 using AnkiPodcastGenerator.Core.Interfaces;
 using AnkiPodcastGenerator.Core.Models;
@@ -21,17 +22,24 @@ public sealed class PodcastGeneratorService(
     IMultiSpeakerTextToSpeechProvider multiSpeakerTextToSpeechProvider,
     IPodcastScriptParser scriptParser,
     IPodcastTtsTextNormalizer ttsTextNormalizer,
+    ITtsScriptNormalizer ttsScriptNormalizer,
     IAudioCombiner audioCombiner,
     IOptions<AnkiOptions> ankiOptions,
     IOptions<PodcastOptions> podcastOptions,
     IOptions<AvalAiOptions> avalAiOptions,
     IOptions<KokoroOptions> kokoroOptions,
+    IOptions<TtsNormalizerOptions> ttsNormalizerOptions,
     ActiveGenerationProfile activeGenerationProfile,
     ILogger<PodcastGeneratorService> logger)
     : IPodcastGeneratorService
 {
     private const string PromptVersion = "topic-grouped-conversation-v5";
     private const string TtsTextNormalizationVersion = "plain-spoken-v1";
+    private const string TtsScriptNormalizationVersion = "static-llm-v1";
+    private static readonly JsonSerializerOptions PronunciationMapJsonOptions = new()
+    {
+        WriteIndented = true
+    };
 
     public Task<int> TestAnkiConnectivityAsync(CancellationToken cancellationToken) =>
         ankiConnectClient.GetVersionAsync(cancellationToken);
@@ -42,6 +50,11 @@ public sealed class PodcastGeneratorService(
         CancellationToken cancellationToken)
     {
         var deck = deckProvider.GetRequiredDeck(deckName);
+        if (deck.MaxCards == 0 && maxCards is null)
+        {
+            return [];
+        }
+
         var ankiQuery = BuildDueCardsQuery(deck);
         var effectiveMaxCards = maxCards ?? deck.MaxCards;
 
@@ -51,7 +64,7 @@ public sealed class PodcastGeneratorService(
         var cards = await ankiConnectClient.CardsInfoAsync(cardIds, cancellationToken);
 
         return OrderCardsForReview(cards)
-            .Take(Math.Max(1, effectiveMaxCards))
+            .Take(effectiveMaxCards)
             .ToArray();
     }
 
@@ -59,9 +72,22 @@ public sealed class PodcastGeneratorService(
     {
         var stopwatch = Stopwatch.StartNew();
         var deck = deckProvider.GetRequiredDeck(deckName);
+        if (deck.MaxCards == 0)
+        {
+            stopwatch.Stop();
+            logger.LogInformation("Deck {DeckName} is disabled because MaxCards=0. Skipping generation.", deck.DeckName);
+            return new PodcastGenerationResult(
+                true,
+                false,
+                0,
+                null,
+                $"Deck '{deck.DeckName}' is disabled (MaxCards=0). No MP3 was generated.");
+        }
+
         var options = podcastOptions.Value;
         var avalAi = avalAiOptions.Value;
         var kokoro = kokoroOptions.Value;
+        var ttsNormalizer = ttsNormalizerOptions.Value;
         var today = DateOnly.FromDateTime(DateTime.Now);
         var outputPaths = outputPathService.GetPaths(deck, today);
 
@@ -123,6 +149,7 @@ public sealed class PodcastGeneratorService(
             options.ScriptProvider,
             options.TextToSpeechProvider,
             BuildTextToSpeechProviderSettings(options.TextToSpeechProvider, kokoro),
+            BuildTtsNormalizerSettings(ttsNormalizer, avalAi.ScriptModel),
             avalAi.ScriptModel,
             avalAi.TtsModel,
             avalAi.TtsFallbackModel,
@@ -317,7 +344,12 @@ public sealed class PodcastGeneratorService(
                 scriptResult.TokenUsage.TotalTokens);
         }
 
-        var ttsResult = await GenerateAudioAsync(scriptResult.Script, multiSpeaker, outputPaths.Mp3Path, cancellationToken);
+        var normalizationResult = await NormalizeAndSaveTtsArtifactsAsync(
+            scriptResult.Script,
+            outputPaths,
+            cancellationToken);
+
+        var ttsResult = await GenerateAudioAsync(normalizationResult.TtsScript, multiSpeaker, outputPaths.Mp3Path, cancellationToken);
 
         var totalCost = ApiCostEstimate.TryCombine(scriptResult.EstimatedCost, ttsResult.EstimatedCost);
         logger.LogInformation(
@@ -406,8 +438,23 @@ public sealed class PodcastGeneratorService(
 
         try
         {
+            var normalizationResult = await ttsScriptNormalizer.NormalizeScriptAsync(scriptResult.Script, cancellationToken);
+            var combinedTtsScript = await BuildCombinedTtsScriptAsync(
+                previousMetadata,
+                normalizationResult.TtsScript,
+                cancellationToken);
+            var combinedPronunciationMap = await BuildCombinedPronunciationMapAsync(
+                previousMetadata,
+                normalizationResult.PronunciationMap,
+                cancellationToken);
+            await SaveTtsArtifactsAsync(
+                outputPaths,
+                combinedTtsScript,
+                combinedPronunciationMap,
+                cancellationToken);
+
             var ttsResult = await GenerateAudioAsync(
-                scriptResult.Script,
+                normalizationResult.TtsScript,
                 multiSpeaker,
                 incrementalMp3Path,
                 cancellationToken);
@@ -508,6 +555,36 @@ public sealed class PodcastGeneratorService(
             cancellationToken);
     }
 
+    private async Task<TtsNormalizationResult> NormalizeAndSaveTtsArtifactsAsync(
+        string script,
+        OutputPaths outputPaths,
+        CancellationToken cancellationToken)
+    {
+        var normalizationResult = await ttsScriptNormalizer.NormalizeScriptAsync(script, cancellationToken);
+        await SaveTtsArtifactsAsync(
+            outputPaths,
+            normalizationResult.TtsScript,
+            normalizationResult.PronunciationMap,
+            cancellationToken);
+
+        return normalizationResult;
+    }
+
+    private async Task SaveTtsArtifactsAsync(
+        OutputPaths outputPaths,
+        string ttsScript,
+        IReadOnlyList<PronunciationMapItem> pronunciationMap,
+        CancellationToken cancellationToken)
+    {
+        await WriteTextFileAsync(outputPaths.TtsScriptPath, ttsScript, cancellationToken);
+        await WriteTextFileAsync(
+            outputPaths.PronunciationMapPath,
+            JsonSerializer.Serialize(pronunciationMap, PronunciationMapJsonOptions),
+            cancellationToken);
+        logger.LogInformation("Saved TTS-normalized script to {TtsScriptPath}", outputPaths.TtsScriptPath);
+        logger.LogInformation("Saved pronunciation map to {PronunciationMapPath}", outputPaths.PronunciationMapPath);
+    }
+
     private async Task<IReadOnlyList<AnkiCard>?> TryGetIncrementalCardsAsync(
         IReadOnlyList<AnkiCard> orderedCards,
         GeneratedPodcastMetadata previousMetadata,
@@ -570,6 +647,67 @@ public sealed class PodcastGeneratorService(
 
         var previousScript = await File.ReadAllTextAsync(previousMetadata.ScriptPath, cancellationToken);
         return $"{previousScript.TrimEnd()}{Environment.NewLine}{Environment.NewLine}{newScript.TrimStart()}";
+    }
+
+    private static Task<string> BuildCombinedTtsScriptAsync(
+        GeneratedPodcastMetadata previousMetadata,
+        string newTtsScript,
+        CancellationToken cancellationToken) =>
+        BuildCombinedTextAsync(
+            previousMetadata.TtsScriptPath,
+            previousMetadata.ScriptPath,
+            newTtsScript,
+            cancellationToken);
+
+    private static async Task<string> BuildCombinedTextAsync(
+        string? preferredPreviousPath,
+        string? fallbackPreviousPath,
+        string newText,
+        CancellationToken cancellationToken)
+    {
+        foreach (var previousPath in new[] { preferredPreviousPath, fallbackPreviousPath })
+        {
+            if (string.IsNullOrWhiteSpace(previousPath) || !File.Exists(previousPath))
+            {
+                continue;
+            }
+
+            var previousText = await File.ReadAllTextAsync(previousPath, cancellationToken);
+            return $"{previousText.TrimEnd()}{Environment.NewLine}{Environment.NewLine}{newText.TrimStart()}";
+        }
+
+        return newText;
+    }
+
+    private static async Task<IReadOnlyList<PronunciationMapItem>> BuildCombinedPronunciationMapAsync(
+        GeneratedPodcastMetadata previousMetadata,
+        IReadOnlyList<PronunciationMapItem> newPronunciationMap,
+        CancellationToken cancellationToken)
+    {
+        var combinedMap = new List<PronunciationMapItem>();
+
+        if (!string.IsNullOrWhiteSpace(previousMetadata.PronunciationMapPath) &&
+            File.Exists(previousMetadata.PronunciationMapPath))
+        {
+            try
+            {
+                var previousMapJson = await File.ReadAllTextAsync(previousMetadata.PronunciationMapPath, cancellationToken);
+                var previousMap = JsonSerializer.Deserialize<List<PronunciationMapItem>>(
+                    previousMapJson,
+                    PronunciationMapJsonOptions);
+
+                if (previousMap is not null)
+                {
+                    combinedMap.AddRange(previousMap);
+                }
+            }
+            catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
+            {
+            }
+        }
+
+        combinedMap.AddRange(newPronunciationMap);
+        return combinedMap;
     }
 
     private static void TryDeleteFile(string path)
@@ -637,6 +775,26 @@ public sealed class PodcastGeneratorService(
             await using var target = File.Create(outputPaths.ScriptPath);
             await source.CopyToAsync(target, cancellationToken);
         }
+
+        if (!string.IsNullOrWhiteSpace(previousMetadata.TtsScriptPath) &&
+            File.Exists(previousMetadata.TtsScriptPath) &&
+            !SamePath(previousMetadata.TtsScriptPath, outputPaths.TtsScriptPath))
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(outputPaths.TtsScriptPath)!);
+            await using var source = File.OpenRead(previousMetadata.TtsScriptPath);
+            await using var target = File.Create(outputPaths.TtsScriptPath);
+            await source.CopyToAsync(target, cancellationToken);
+        }
+
+        if (!string.IsNullOrWhiteSpace(previousMetadata.PronunciationMapPath) &&
+            File.Exists(previousMetadata.PronunciationMapPath) &&
+            !SamePath(previousMetadata.PronunciationMapPath, outputPaths.PronunciationMapPath))
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(outputPaths.PronunciationMapPath)!);
+            await using var source = File.OpenRead(previousMetadata.PronunciationMapPath);
+            await using var target = File.Create(outputPaths.PronunciationMapPath);
+            await source.CopyToAsync(target, cancellationToken);
+        }
     }
 
     private static GeneratedPodcastMetadata CreateMetadata(
@@ -683,6 +841,8 @@ public sealed class PodcastGeneratorService(
             Reused = false,
             CardsJsonPath = outputPaths.CardsJsonPath,
             ScriptPath = outputPaths.ScriptPath,
+            TtsScriptPath = outputPaths.TtsScriptPath,
+            PronunciationMapPath = outputPaths.PronunciationMapPath,
             Mp3Path = outputPaths.Mp3Path,
             ScriptProvider = scriptProvider,
             TextToSpeechProvider = textToSpeechProvider,
@@ -743,6 +903,7 @@ public sealed class PodcastGeneratorService(
         string scriptProvider,
         string textToSpeechProvider,
         string textToSpeechProviderSettings,
+        string ttsNormalizerSettings,
         string scriptModel,
         string ttsModel,
         string ttsFallbackModel,
@@ -754,6 +915,7 @@ public sealed class PodcastGeneratorService(
             "\n",
             PromptVersion,
             TtsTextNormalizationVersion,
+            TtsScriptNormalizationVersion,
             ankiQuery,
             targetMinutes,
             maxCards,
@@ -762,6 +924,7 @@ public sealed class PodcastGeneratorService(
             scriptProvider,
             textToSpeechProvider,
             textToSpeechProviderSettings,
+            ttsNormalizerSettings,
             scriptModel,
             ttsModel,
             ttsFallbackModel,
@@ -784,5 +947,23 @@ public sealed class PodcastGeneratorService(
             "\n",
             kokoroOptions.ModelName,
             kokoroOptions.Language);
+    }
+
+    private static string BuildTtsNormalizerSettings(
+        TtsNormalizerOptions normalizerOptions,
+        string defaultLlmModel)
+    {
+        var mode = string.IsNullOrWhiteSpace(normalizerOptions.Mode)
+            ? string.Empty
+            : normalizerOptions.Mode.Trim();
+        var llmModel = string.IsNullOrWhiteSpace(normalizerOptions.LlmModel)
+            ? defaultLlmModel
+            : normalizerOptions.LlmModel.Trim();
+
+        return string.Join(
+            "\n",
+            normalizerOptions.Enabled,
+            mode,
+            llmModel);
     }
 }

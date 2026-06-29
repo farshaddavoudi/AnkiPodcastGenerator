@@ -5,6 +5,8 @@ public sealed record OutputPaths(
     string DeckSlug,
     string CardsJsonPath,
     string ScriptPath,
+    string TtsScriptPath,
+    string PronunciationMapPath,
     string Mp3Path,
     string MetadataPath,
     int BundleIndex = 1,

@@ -28,6 +28,8 @@ public sealed class GeneratedPodcastMetadata
     public string? ReusedFromMp3Path { get; set; }
     public string CardsJsonPath { get; set; } = string.Empty;
     public string ScriptPath { get; set; } = string.Empty;
+    public string TtsScriptPath { get; set; } = string.Empty;
+    public string PronunciationMapPath { get; set; } = string.Empty;
     public string Mp3Path { get; set; } = string.Empty;
     public string ScriptProvider { get; set; } = string.Empty;
     public string TextToSpeechProvider { get; set; } = string.Empty;

@@ -1,3 +1,4 @@
 <Solution>
+  <Project Path="AnkiPodcastGenerator.Tests/AnkiPodcastGenerator.Tests.csproj" />
   <Project Path="AnkiPodcastGenerator/AnkiPodcastGenerator.csproj" />
 </Solution>

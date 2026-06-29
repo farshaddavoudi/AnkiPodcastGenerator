@@ -71,7 +71,9 @@ public sealed class CommandLineApp(
 
         foreach (var deck in deckProvider.GetAllDecks())
         {
-            var details = $"MaxCards={deck.MaxCards}";
+            var details = deck.MaxCards == 0
+                ? "disabled, MaxCards=0"
+                : $"MaxCards={deck.MaxCards}";
             if (deck.CardsPerPodcast is > 0)
             {
                 details += $", CardsPerPodcast={deck.CardsPerPodcast}";
@@ -110,8 +112,23 @@ public sealed class CommandLineApp(
             return 2;
         }
 
+        var enabledDecks = decks
+            .Where(deck => deck.MaxCards > 0)
+            .ToArray();
+
+        foreach (var disabledDeck in decks.Where(deck => deck.MaxCards == 0))
+        {
+            Console.WriteLine($"Skipping disabled deck: {disabledDeck.DeckName} (MaxCards=0)");
+        }
+
+        if (enabledDecks.Length == 0)
+        {
+            Console.WriteLine("No enabled decks are configured. Set MaxCards above 0 to generate podcasts.");
+            return 0;
+        }
+
         var exitCode = 0;
-        foreach (var deck in decks)
+        foreach (var deck in enabledDecks)
         {
             Console.WriteLine($"Generating deck: {deck.DeckName}");
 

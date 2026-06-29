@@ -41,9 +41,9 @@ public sealed class DeckProvider : IDeckProvider
                 throw new InvalidOperationException("Each configured deck must set DeckName.");
             }
 
-            if (deck.MaxCards <= 0)
+            if (deck.MaxCards < 0)
             {
-                throw new InvalidOperationException($"Deck '{deck.DeckName}' must set MaxCards to a positive integer.");
+                throw new InvalidOperationException($"Deck '{deck.DeckName}' must set MaxCards to zero or a positive integer.");
             }
 
             if (deck.CardsPerPodcast is <= 0)
